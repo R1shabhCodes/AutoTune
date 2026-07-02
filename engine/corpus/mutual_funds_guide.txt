@@ -1,0 +1,48 @@
+Mutual Funds in India: A Comprehensive Guide
+
+A mutual fund is an investment vehicle that pools money from multiple investors and invests it in a diversified portfolio of stocks, bonds, or other securities. In India, mutual funds are regulated by the Securities and Exchange Board of India (SEBI).
+
+Key Concepts:
+
+NAV (Net Asset Value):
+NAV represents the per-unit market value of a mutual fund scheme. It is calculated as: NAV = (Total Assets - Total Liabilities) / Total Number of Outstanding Units. NAV is updated at the end of every business day. When you invest Rs 10,000 in a fund with NAV of Rs 50, you receive 200 units.
+
+SIP (Systematic Investment Plan):
+SIP allows investors to invest a fixed amount at regular intervals (monthly, quarterly). It enables rupee cost averaging, where more units are bought when prices are low and fewer when prices are high. The minimum SIP amount starts from Rs 500 per month in most funds. SIP provides the benefit of compounding and reduces the risk of market timing.
+
+Types of Mutual Funds:
+
+1. Equity Funds: Invest primarily in stocks. Sub-categories include:
+   - Large Cap Funds: Invest at least 80% in top 100 companies by market capitalization
+   - Mid Cap Funds: Invest at least 65% in companies ranked 101-250 by market capitalization
+   - Small Cap Funds: Invest at least 65% in companies ranked below 250 by market capitalization
+   - Multi Cap Funds: Must invest at least 25% each in large, mid, and small cap stocks
+   - Flexi Cap Funds: Invest across market capitalizations with no minimum allocation requirement
+
+2. Debt Funds: Invest in fixed-income securities like government bonds, corporate bonds, and money market instruments. These are suitable for conservative investors seeking stable returns. Sub-categories include liquid funds, short duration funds, and gilt funds.
+
+3. Hybrid Funds: Invest in a mix of equity and debt instruments. Aggressive hybrid funds invest 65-80% in equity, while conservative hybrid funds invest 10-25% in equity.
+
+ELSS (Equity Linked Savings Scheme):
+ELSS is a type of equity mutual fund that qualifies for tax deduction under Section 80C of the Income Tax Act. Key features:
+- Lock-in period of 3 years, the shortest among all Section 80C investments
+- Maximum deduction of Rs 1.5 lakh per financial year
+- Returns are market-linked and historically have given 12-15% CAGR over long periods
+- Long-term capital gains above Rs 1.25 lakh are taxed at 12.5%
+
+Expense Ratio:
+The expense ratio is the annual fee charged by the fund house for managing the fund. It is expressed as a percentage of the fund's average AUM (Assets Under Management). SEBI has capped the maximum expense ratio for equity funds at 2.25% for funds with AUM up to Rs 500 crore. Direct plans have lower expense ratios (typically 0.5-1%) compared to regular plans (1-2%) because they exclude distributor commissions.
+
+Exit Load:
+Exit load is a fee charged when investors redeem their units before a specified period. Most equity funds charge a 1% exit load if redeemed within one year of investment. Liquid funds typically have a graded exit load for redemptions within 7 days. ELSS funds have no exit load after the mandatory 3-year lock-in period.
+
+Capital Gains Tax on Mutual Funds:
+For equity funds (holding more than 65% in equities):
+- Short-term capital gains (held less than 12 months): Taxed at 20%
+- Long-term capital gains (held more than 12 months): Taxed at 12.5% on gains exceeding Rs 1.25 lakh per year
+
+For debt funds (holding less than 65% in equities):
+- All gains are taxed at the investor's income tax slab rate, regardless of the holding period. This change was introduced in the Finance Act 2023.
+
+SWP (Systematic Withdrawal Plan):
+SWP allows investors to withdraw a fixed amount at regular intervals from their mutual fund investment. It is the opposite of SIP and is commonly used by retirees to generate regular income from their corpus.

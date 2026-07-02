@@ -1,0 +1,18 @@
+[
+  {
+    "question": "What is the tax rate for income above 15 lakh under the new regime?",
+    "expected_answer_contains": ["30%"]
+  },
+  {
+    "question": "What are the types of GST in India?",
+    "expected_answer_contains": ["CGST", "SGST", "IGST"]
+  },
+  {
+    "question": "What does NAV stand for in mutual funds?",
+    "expected_answer_contains": ["Net Asset Value"]
+  },
+  {
+    "question": "What is the current repo rate set by RBI?",
+    "expected_answer_contains": ["6.50"]
+  }
+]

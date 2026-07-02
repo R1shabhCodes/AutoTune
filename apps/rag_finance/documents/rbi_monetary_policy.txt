@@ -1,0 +1,32 @@
+Reserve Bank of India (RBI) Monetary Policy Framework
+
+The Reserve Bank of India (RBI) is India's central bank, established on April 1, 1935. Its primary objectives include maintaining price stability (controlling inflation), managing the country's monetary policy, regulating the banking sector, and managing foreign exchange reserves.
+
+Monetary Policy Committee (MPC):
+Since 2016, India's monetary policy is decided by a six-member Monetary Policy Committee (MPC). The committee consists of three members from the RBI (including the Governor as chairperson) and three external members appointed by the Government of India. The MPC meets at least four times a year and decisions are made by majority vote. The Governor has a casting vote in case of a tie.
+
+Repo Rate:
+The repo rate is the rate at which the RBI lends short-term money to commercial banks against government securities. As of October 2024, the repo rate stands at 6.50%. When the RBI wants to reduce inflation, it increases the repo rate, making borrowing expensive for banks, which in turn raises lending rates for consumers and businesses. Conversely, a decrease in the repo rate makes borrowing cheaper, stimulating economic activity.
+
+Reverse Repo Rate:
+The reverse repo rate is the rate at which the RBI borrows money from commercial banks. It is typically 25 basis points below the repo rate. Banks park their excess funds with the RBI at this rate. Currently, the reverse repo rate is 3.35%. A higher reverse repo rate incentivizes banks to deposit more funds with the RBI, reducing the money supply in the economy.
+
+Cash Reserve Ratio (CRR):
+CRR is the percentage of a bank's total deposits that must be maintained as liquid cash with the RBI. The current CRR is 4.50%. Banks do not earn any interest on the CRR deposits. For example, if a bank has total deposits of Rs 100 crore, it must keep Rs 4.5 crore with the RBI. Changes in CRR directly impact the amount of money available for banks to lend.
+
+Statutory Liquidity Ratio (SLR):
+SLR is the percentage of net demand and time liabilities (NDTL) that banks must maintain in the form of liquid assets such as government securities, cash, and gold. The current SLR is 18%. Unlike CRR, banks earn interest on SLR investments since they hold government bonds. SLR ensures that banks have a reserve of liquid assets.
+
+Inflation Targeting:
+In 2016, the Government of India and RBI adopted a flexible inflation targeting framework. The target is to maintain Consumer Price Index (CPI) inflation at 4% with an upper tolerance limit of 6% and a lower tolerance limit of 2%. If inflation remains above 6% or below 2% for three consecutive quarters, the RBI must provide a written explanation to the government. In FY 2023-24, average CPI inflation was approximately 5.4%.
+
+Liquidity Adjustment Facility (LAF):
+LAF is the primary instrument through which the RBI manages day-to-day liquidity in the banking system. It consists of two components:
+- Repo operations: Banks borrow from RBI (injects liquidity)
+- Reverse repo operations: Banks lend to RBI (absorbs liquidity)
+
+Marginal Standing Facility (MSF):
+MSF is an emergency lending window where banks can borrow overnight funds from the RBI at a rate 25 basis points above the repo rate. Currently, the MSF rate is 6.75%. Banks can borrow up to 2% of their NDTL through this facility.
+
+Open Market Operations (OMO):
+OMOs involve the buying and selling of government securities by the RBI in the open market. When the RBI buys securities, it injects liquidity into the system. When it sells securities, it absorbs liquidity. OMOs are used to manage long-term liquidity conditions in the economy.

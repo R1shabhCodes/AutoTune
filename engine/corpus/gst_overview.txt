@@ -1,0 +1,35 @@
+Goods and Services Tax (GST) in India
+
+The Goods and Services Tax (GST) was introduced in India on July 1, 2017, replacing multiple indirect taxes like VAT, service tax, excise duty, and central sales tax. GST is a destination-based tax levied on the supply of goods and services across the country.
+
+Types of GST:
+There are four types of GST in India:
+1. CGST (Central GST): Collected by the central government on intra-state sales
+2. SGST (State GST): Collected by the state government on intra-state sales
+3. IGST (Integrated GST): Collected by the central government on inter-state sales and imports
+4. UTGST (Union Territory GST): Applicable for Union Territories without a legislature
+
+GST Tax Slabs:
+GST has a four-tier rate structure:
+- 5% GST: Essential items like packaged food, footwear below Rs 1,000, transport services, and small restaurants
+- 12% GST: Business class air tickets, frozen meat products, fruit juices, apparel above Rs 1,000
+- 18% GST: Most goods and services including IT services, financial services, restaurants in hotels, telecom services, branded garments, and consumer electronics
+- 28% GST: Luxury and demerit goods like automobiles, cement, pan masala, aerated drinks, and air conditioners
+
+Some essential goods like fresh fruits, vegetables, milk, bread, and educational services are exempt from GST (0% rate).
+
+Input Tax Credit (ITC):
+Input Tax Credit is a mechanism that allows businesses to reduce their GST liability by claiming credit for the tax already paid on purchases (inputs). For example, if a manufacturer pays Rs 10,000 GST on raw materials and charges Rs 15,000 GST on finished goods, they only need to pay Rs 5,000 to the government. ITC can only be claimed if the supplier has filed their GST returns and the purchase is used for business purposes.
+
+GST Returns and Filing:
+Businesses registered under GST must file regular returns:
+- GSTR-1: Monthly or quarterly return for reporting outward supplies (sales). Due by the 11th of the following month.
+- GSTR-3B: Monthly summary return for reporting summary of outward and inward supplies, along with tax payment. Due by the 20th of the following month.
+- GSTR-9: Annual return due by December 31 of the following financial year.
+- GSTR-2A/2B: Auto-populated returns showing inward supplies based on suppliers' GSTR-1 filings.
+
+GST Registration:
+Registration under GST is mandatory when annual turnover exceeds Rs 40 lakh for goods suppliers (Rs 20 lakh for service providers). The threshold for special category states is Rs 20 lakh for goods and Rs 10 lakh for services. Every registered business receives a 15-digit GSTIN (GST Identification Number) which is unique to each state of operation.
+
+Composition Scheme:
+Small taxpayers with turnover up to Rs 1.5 crore can opt for the Composition Scheme, which allows them to pay GST at a fixed rate (1% for manufacturers, 5% for restaurants, and 6% for service providers) without the need to maintain detailed records. However, they cannot claim input tax credit or collect GST from customers.

@@ -1,0 +1,47 @@
+Union Budget 2024-25: Key Highlights
+
+The Union Budget for the financial year 2024-25 was presented by Finance Minister Nirmala Sitharaman on July 23, 2024. This was the first full budget of the Modi 3.0 government and focused on employment, skilling, MSMEs, and the middle class.
+
+Income Tax Changes:
+Under the new tax regime, the standard deduction for salaried employees was increased from Rs 50,000 to Rs 75,000. The tax slabs were also revised:
+- 0 to Rs 3 lakh: Nil
+- Rs 3 to 7 lakh: 5%
+- Rs 7 to 10 lakh: 10%
+- Rs 10 to 12 lakh: 15%
+- Rs 12 to 15 lakh: 20%
+- Above Rs 15 lakh: 30%
+
+This revision is expected to save up to Rs 17,500 in taxes for salaried individuals opting for the new regime.
+
+Capital Gains Tax Overhaul:
+The budget simplified the capital gains tax structure:
+- Short-term capital gains (STCG) on listed equity shares and equity mutual funds: Increased from 15% to 20%
+- Long-term capital gains (LTCG) on all asset classes: Unified at 12.5% (previously 10% for listed equity and 20% with indexation for other assets)
+- LTCG exemption limit on listed equity: Increased from Rs 1 lakh to Rs 1.25 lakh per year
+- Indexation benefit has been removed for all asset classes including real estate. However, for properties purchased before July 23, 2024, taxpayers can choose between the old rate of 20% with indexation or the new rate of 12.5% without indexation
+
+Securities Transaction Tax (STT):
+STT on futures contracts was increased from 0.0125% to 0.02%. STT on options contracts was increased from 0.0625% to 0.1%. These changes were aimed at curbing speculative trading in derivatives markets.
+
+Employment and Skilling:
+The budget introduced several employment-linked incentive schemes:
+- Scheme A: First-time employees registered with EPFO will receive one month's salary (up to Rs 15,000) in three installments
+- Scheme B: Incentives for both employees and employers for job creation in the manufacturing sector
+- Scheme C: Government will reimburse employers up to Rs 3,000 per month per employee for EPFO contributions for new hires for two years
+
+A target of skilling 20 lakh youth over 5 years under a centralized scheme was announced. Additionally, 1,000 Industrial Training Institutes (ITIs) will be upgraded.
+
+MSME Support:
+Credit guarantee scheme for MSMEs was expanded. Term loans up to Rs 100 crore will be available without collateral or third-party guarantee. A new assessment model for MSME credit will be introduced. SIDBI will open 24 new branches to serve MSME clusters. Mudra loan limit under the Tarun category was increased from Rs 10 lakh to Rs 20 lakh.
+
+Angel Tax Abolition:
+The budget abolished the angel tax for all classes of investors. Angel tax was previously levied when unlisted companies received funding above fair market value. This move was aimed at boosting the startup ecosystem in India.
+
+Infrastructure and Housing:
+Capital expenditure was maintained at Rs 11.11 lakh crore (3.4% of GDP). Interest-free loans of Rs 1.5 lakh crore were allocated to states for infrastructure development. Under the PM Awas Yojana Urban 2.0, Rs 10 lakh crore was allocated for building 1 crore new urban houses. The budget also allocated funds for building 12 new industrial cities.
+
+Fiscal Deficit Target:
+The fiscal deficit target for FY 2024-25 was set at 4.9% of GDP, down from 5.6% in the revised estimate for FY 2023-24. The government aims to reduce the fiscal deficit below 4.5% of GDP by FY 2025-26.
+
+Customs Duty Changes:
+Basic customs duty on mobile phones and chargers was reduced from 20% to 15%. Customs duty on gold and silver was reduced from 15% to 6%. Customs duty on cancer medicines (3 specific drugs) was fully exempted. Duty on critical minerals like lithium and cobalt was reduced to zero.
