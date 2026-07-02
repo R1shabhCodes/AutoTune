@@ -60,7 +60,7 @@ def evaluate(config: dict, label: str) -> dict:
         score = matched / len(expected) if expected else 0.0
         total_score += score
 
-        status = "✅" if score >= 0.5 else "❌"
+        status = "[OK]" if score >= 0.5 else "[FAIL]"
         print(f"  [{idx+1:2d}/{len(EVAL_SET)}] {status} Score: {score:.2f} | {question}")
         if score < 1.0:
             print(f"           Expected: {expected}")
@@ -74,14 +74,14 @@ def evaluate(config: dict, label: str) -> dict:
         })
 
     aggregate = total_score / len(EVAL_SET) if EVAL_SET else 0.0
-    print(f"\n  📊 {label} Aggregate Score: {aggregate:.4f} ({aggregate*100:.1f}%)\n")
+    print(f"\n  [SCORE] {label} Aggregate Score: {aggregate:.4f} ({aggregate*100:.1f}%)\n")
     return {"label": label, "aggregate_score": aggregate, "results": results, "config": config}
 
 
 def print_comparison(default_result: dict, optimized_result: dict):
     """Print a detailed side-by-side comparison."""
     print("\n" + "=" * 80)
-    print("  📊 BENCHMARK COMPARISON: DEFAULT vs OPTIMIZED")
+    print("  BENCHMARK COMPARISON: DEFAULT vs OPTIMIZED")
     print("=" * 80)
 
     # Config comparison
@@ -91,7 +91,7 @@ def print_comparison(default_result: dict, optimized_result: dict):
     for key in ["chunk_size", "chunk_overlap", "top_k", "temperature"]:
         dv = str(default_result["config"].get(key, "N/A"))
         ov = str(optimized_result["config"].get(key, "N/A"))
-        marker = " ✨" if dv != ov else ""
+        marker = " *" if dv != ov else ""
         print(f"  {key:<20} {dv:<20} {ov:<20}{marker}")
 
     # Score comparison
@@ -101,7 +101,7 @@ def print_comparison(default_result: dict, optimized_result: dict):
         q = d["question"][:62] + "..." if len(d["question"]) > 62 else d["question"]
         ds = f"{d['score']:.2f}"
         os_ = f"{o['score']:.2f}"
-        marker = " ⬆" if o["score"] > d["score"] else (" ⬇" if o["score"] < d["score"] else "  ")
+        marker = " +" if o["score"] > d["score"] else (" -" if o["score"] < d["score"] else "  ")
         print(f"  {q:<65} {ds:<10} {os_:<10}{marker}")
 
     # Summary
@@ -124,12 +124,12 @@ def print_comparison(default_result: dict, optimized_result: dict):
     }
     with open("benchmark_results.json", "w") as f:
         json.dump(output, f, indent=2)
-    print("  📁 Results saved to benchmark_results.json\n")
+    print("  Results saved to benchmark_results.json\n")
 
 
 def main():
     print("\n" + "=" * 80)
-    print("  🏦 RAG-Finance Benchmark: Before vs After AutoTune Optimization")
+    print("  RAG-Finance Benchmark: Before vs After AutoTune Optimization")
     print("=" * 80)
 
     # Default config (intentionally suboptimal)
@@ -146,15 +146,15 @@ def main():
     if os.path.exists(optimized_path):
         with open(optimized_path, "r") as f:
             optimized_config = json.load(f)
-        print(f"\n  ✅ Found optimized config at: {optimized_path}")
+        print(f"\n  [FOUND] Found optimized config at: {optimized_path}")
     else:
         # If no optimized config, use current config.json (which may have been updated by AutoTune)
         current_config = rag.load_config()
         if current_config != default_config:
             optimized_config = current_config
-            print(f"\n  ℹ️  Using current config.json as optimized config (differs from default)")
+            print(f"\n  [INFO] Using current config.json as optimized config (differs from default)")
         else:
-            print(f"\n  ⚠️  No optimized config found. Run AutoTune first to generate one!")
+            print(f"\n  [WARNING] No optimized config found. Run AutoTune first to generate one!")
             print(f"     Creating a sample optimized config with better defaults for demo...\n")
             optimized_config = {
                 "chunk_size": 500,
@@ -172,7 +172,7 @@ def main():
 
     # Print comparison
     print_comparison(default_result, optimized_result)
-    print(f"  ⏱ Total benchmark time: {elapsed:.1f}s\n")
+    print(f"  Total benchmark time: {elapsed:.1f}s\n")
 
 
 if __name__ == "__main__":
