@@ -9,6 +9,9 @@ export default function App() {
   const [holdoutScore, setHoldoutScore] = useState(null);
   const [runCount, setRunCount] = useState(15);
   const [errorMsg, setErrorMsg] = useState(null);
+  const [viewMode, setViewMode] = useState('chart'); // 'chart' or 'table'
+  const [selectedIters, setSelectedIters] = useState([]);
+  const [showCompareModal, setShowCompareModal] = useState(false);
   
   const wsRef = useRef(null);
 
@@ -199,6 +202,62 @@ export default function App() {
     return null;
   };
 
+  // Phase 4 - Helper functions for Config Reconstruction & Selection Comparison
+  const getConfigAtIteration = (iterNum) => {
+    if (!bestConfig || !bestConfig.config) return null;
+    const config = { ...bestConfig.config };
+    const sortedIters = [...iterations].sort((a, b) => b.iteration_number - a.iteration_number);
+    for (const item of sortedIters) {
+      if (item.iteration_number > iterNum && item.accepted && item.param !== 'None') {
+        const paramKey = item.param;
+        const currentVal = config[paramKey];
+        let oldVal = item.old_value;
+        if (typeof currentVal === 'number') {
+          oldVal = Number(oldVal);
+        }
+        config[paramKey] = oldVal;
+      }
+    }
+    return config;
+  };
+
+  const handleToggleSelect = (iterNum) => {
+    setSelectedIters((prev) => {
+      if (prev.includes(iterNum)) {
+        return prev.filter((id) => id !== iterNum);
+      }
+      if (prev.length >= 2) {
+        return prev;
+      }
+      return [...prev, iterNum];
+    });
+  };
+
+  const isCheckboxDisabled = (iterNum) => {
+    return !selectedIters.includes(iterNum) && selectedIters.length >= 2;
+  };
+
+  // Pre-fetch compared iterations for rendering later
+  const sortedSelected = [...selectedIters].sort((a, b) => a - b);
+  const iterA = iterations.find(it => it.iteration_number === sortedSelected[0]);
+  const iterB = iterations.find(it => it.iteration_number === sortedSelected[1]);
+  const configA = iterA ? getConfigAtIteration(iterA.iteration_number) : null;
+  const configB = iterB ? getConfigAtIteration(iterB.iteration_number) : null;
+
+  const renderConfigCompareRow = (label, key) => {
+    const valA = configA ? configA[key] : 'N/A';
+    const valB = configB ? configB[key] : 'N/A';
+    const isDifferent = valA !== valB;
+    
+    return (
+      <tr key={key} className={isDifferent ? 'diff-highlight' : ''}>
+        <td className="param-label">{label}</td>
+        <td className={`param-value ${isDifferent ? 'diff-val-a' : ''}`}>{String(valA)}</td>
+        <td className={`param-value ${isDifferent ? 'diff-val-b' : ''}`}>{String(valB)}</td>
+      </tr>
+    );
+  };
+
   return (
     <div className="app-container">
       {/* Header */}
@@ -334,76 +393,175 @@ export default function App() {
 
       {/* Main Sections Grid */}
       <div className="dashboard-grid">
-        {/* Left Column: Progress Chart */}
+        {/* Left Column: Progress Chart / Table View */}
         <div className="glass-card column-card chart-card">
-          <h2 className="section-title">Optimization Progress</h2>
-          {chartData.length > 0 ? (
-            <div className="chart-wrapper">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData} margin={{ top: 10, right: 20, left: -20, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                  <XAxis 
-                    dataKey="iteration" 
-                    stroke="var(--text-secondary)" 
-                    tickLine={false}
-                    fontSize={12}
-                  />
-                  <YAxis 
-                    stroke="var(--text-secondary)" 
-                    domain={[0.0, 1.0]} 
-                    tickLine={false}
-                    fontSize={12}
-                    tickFormatter={(val) => val.toFixed(1)}
-                  />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Line 
-                    type="monotone" 
-                    dataKey="score" 
-                    name="Accuracy"
-                    stroke="#8b5cf6" 
-                    strokeWidth={1.5}
-                    strokeDasharray="5 5"
-                    dot={(props) => {
-                      const { cx, cy, payload } = props;
-                      if (!payload || payload.iteration === 0) return null;
-                      return (
-                        <circle 
-                          key={`${payload.iteration}-accuracy-dot`}
-                          cx={cx} 
-                          cy={cy} 
-                          r={3.5} 
-                          fill={payload.accepted ? 'var(--status-green)' : 'var(--status-red)'}
-                          stroke="none"
-                        />
-                      );
-                    }}
-                    activeDot={{ r: 5, strokeWidth: 0 }}
-                  />
-                  <Line 
-                    type="monotone" 
-                    dataKey="composite" 
-                    name="Composite Score"
-                    stroke="#10b981" 
-                    strokeWidth={3.5}
-                    dot={(props) => {
-                      const { cx, cy, payload } = props;
-                      if (!payload || payload.iteration === 0) return null;
-                      return (
-                        <circle 
-                          key={`${payload.iteration}-composite-dot`}
-                          cx={cx} 
-                          cy={cy} 
-                          r={4.5} 
-                          fill={payload.accepted ? 'var(--status-green)' : 'var(--status-red)'}
-                          stroke="none"
-                        />
-                      );
-                    }}
-                    activeDot={{ r: 6.5, strokeWidth: 0 }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
+          <div className="chart-header-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <h2 className="section-title" style={{ margin: 0 }}>Optimization Progress</h2>
+              {viewMode === 'table' && selectedIters.length === 2 && (
+                <button 
+                  className="btn-primary compare-btn animate-pulse"
+                  onClick={() => setShowCompareModal(true)}
+                  style={{ padding: '0.25rem 0.6rem', fontSize: '0.7rem', height: '24px', display: 'flex', alignItems: 'center', gap: '0.25rem', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                >
+                  📊 Compare (2 Selected)
+                </button>
+              )}
             </div>
+            <div className="tab-selector">
+              <button 
+                className={`tab-btn ${viewMode === 'chart' ? 'active' : ''}`}
+                onClick={() => setViewMode('chart')}
+              >
+                Chart
+              </button>
+              <button 
+                className={`tab-btn ${viewMode === 'table' ? 'active' : ''}`}
+                onClick={() => setViewMode('table')}
+              >
+                Table
+              </button>
+            </div>
+          </div>
+
+          {chartData.length > 0 ? (
+            viewMode === 'chart' ? (
+              <div className="chart-wrapper">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={chartData} margin={{ top: 10, right: 20, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                    <XAxis 
+                      dataKey="iteration" 
+                      stroke="var(--text-secondary)" 
+                      tickLine={false}
+                      fontSize={12}
+                    />
+                    <YAxis 
+                      stroke="var(--text-secondary)" 
+                      domain={[0.0, 1.0]} 
+                      tickLine={false}
+                      fontSize={12}
+                      tickFormatter={(val) => val.toFixed(1)}
+                    />
+                    <Tooltip content={<CustomTooltip />} />
+                    <Line 
+                      type="monotone" 
+                      dataKey="score" 
+                      name="Accuracy"
+                      stroke="#8b5cf6" 
+                      strokeWidth={1.5}
+                      strokeDasharray="5 5"
+                      dot={(props) => {
+                        const { cx, cy, payload } = props;
+                        if (!payload || payload.iteration === 0) return null;
+                        return (
+                          <circle 
+                            key={`${payload.iteration}-accuracy-dot`}
+                            cx={cx} 
+                            cy={cy} 
+                            r={3.5} 
+                            fill={payload.accepted ? 'var(--status-green)' : 'var(--status-red)'}
+                            stroke="none"
+                          />
+                        );
+                      }}
+                      activeDot={{ r: 5, strokeWidth: 0 }}
+                    />
+                    <Line 
+                      type="monotone" 
+                      dataKey="composite" 
+                      name="Composite Score"
+                      stroke="#10b981" 
+                      strokeWidth={3.5}
+                      dot={(props) => {
+                        const { cx, cy, payload } = props;
+                        if (!payload || payload.iteration === 0) return null;
+                        return (
+                          <circle 
+                            key={`${payload.iteration}-composite-dot`}
+                            cx={cx} 
+                            cy={cy} 
+                            r={4.5} 
+                            fill={payload.accepted ? 'var(--status-green)' : 'var(--status-red)'}
+                            stroke="none"
+                          />
+                        );
+                      }}
+                      activeDot={{ r: 6.5, strokeWidth: 0 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <div className="table-wrapper" style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+                <table className="experiment-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: '50px', textAlign: 'center' }}>Select</th>
+                      <th style={{ width: '60px' }}>Iter #</th>
+                      <th>Parameter Tuned</th>
+                      <th>Accuracy</th>
+                      <th>Latency</th>
+                      <th>Tokens</th>
+                      <th>Composite</th>
+                      <th style={{ width: '90px' }}>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...iterations].sort((a, b) => b.iteration_number - a.iteration_number).map((item) => {
+                      const isSelected = selectedIters.includes(item.iteration_number);
+                      const isDisabled = isCheckboxDisabled(item.iteration_number);
+                      const scores = {
+                        newAcc: item.new_score,
+                        newComp: item.composite_score !== undefined && item.composite_score !== null ? item.composite_score : item.new_score,
+                        oldAcc: item.old_score,
+                      };
+                      return (
+                        <tr 
+                          key={item.iteration_number} 
+                          className={`${isSelected ? 'selected' : ''} ${item.accepted ? 'accepted' : 'rejected'}`}
+                        >
+                          <td style={{ textAlign: 'center' }}>
+                            <input 
+                              type="checkbox"
+                              checked={isSelected}
+                              disabled={isDisabled}
+                              onChange={() => handleToggleSelect(item.iteration_number)}
+                              style={{ cursor: 'pointer' }}
+                            />
+                          </td>
+                          <td>#{item.iteration_number}</td>
+                          <td style={{ fontFamily: 'monospace', color: 'var(--accent-cyan)' }}>
+                            {item.param !== 'None' ? item.param : <span style={{ color: 'var(--text-secondary)' }}>Baseline</span>}
+                          </td>
+                          <td>
+                            {item.iteration_number === 0 ? (
+                              scores.newAcc.toFixed(4)
+                            ) : (
+                              `${scores.oldAcc.toFixed(3)} → ${scores.newAcc.toFixed(3)}`
+                            )}
+                          </td>
+                          <td>
+                            {item.avg_latency_ms > 0 ? `${item.avg_latency_ms.toFixed(0)}ms` : '---'}
+                          </td>
+                          <td>
+                            {item.total_tokens > 0 ? item.total_tokens.toLocaleString() : '---'}
+                          </td>
+                          <td>
+                            {scores.newComp.toFixed(4)}
+                          </td>
+                          <td>
+                            <span className={`badge ${item.accepted ? 'accepted' : 'rejected'}`} style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem' }}>
+                              {item.accepted ? 'Accepted' : 'Rejected'}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )
           ) : (
             <div className="empty-feed">
               <span className="empty-icon">📈</span>
@@ -533,6 +691,107 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      {/* Comparison Overlay Modal */}
+      {showCompareModal && iterA && iterB && (
+        <div className="compare-modal-overlay">
+          <div className="compare-modal-card glass-card">
+            <div className="compare-modal-header">
+              <h3>Configuration Comparison</h3>
+              <button className="close-modal-btn" onClick={() => setShowCompareModal(false)}>✕</button>
+            </div>
+            
+            <div className="compare-modal-content">
+              {/* Split Headers */}
+              <div className="compare-split-headers">
+                <div className="compare-header-col">
+                  <h4>Iteration #{iterA.iteration_number}</h4>
+                  <span className={`badge ${iterA.accepted ? 'accepted' : 'rejected'}`}>
+                    {iterA.accepted ? 'Accepted' : 'Rejected'}
+                  </span>
+                </div>
+                <div className="compare-header-col">
+                  <h4>Iteration #{iterB.iteration_number}</h4>
+                  <span className={`badge ${iterB.accepted ? 'accepted' : 'rejected'}`}>
+                    {iterB.accepted ? 'Accepted' : 'Rejected'}
+                  </span>
+                </div>
+              </div>
+              
+              {/* Hypotheses */}
+              <div className="compare-hypotheses">
+                <div className="compare-hyp-col">
+                  <div className="compare-section-title">Hypothesis</div>
+                  <p className="compare-hyp-text">&ldquo;{iterA.hypothesis || 'Baseline Setup'}&rdquo;</p>
+                  {iterA.motivated_by && (
+                    <div className="compare-mot-text">Targeted: {iterA.motivated_by}</div>
+                  )}
+                </div>
+                <div className="compare-hyp-col">
+                  <div className="compare-section-title">Hypothesis</div>
+                  <p className="compare-hyp-text">&ldquo;{iterB.hypothesis || 'Baseline Setup'}&rdquo;</p>
+                  {iterB.motivated_by && (
+                    <div className="compare-mot-text">Targeted: {iterB.motivated_by}</div>
+                  )}
+                </div>
+              </div>
+              
+              {/* Metrics */}
+              <div className="compare-metrics-section">
+                <div className="compare-section-title" style={{ gridColumn: 'span 3', textAlign: 'center', marginBottom: '0.5rem' }}>Metrics Comparison</div>
+                
+                <div className="compare-metric-row">
+                  <span className="metric-label">Accuracy Score</span>
+                  <span className="metric-val" style={{ color: '#8b5cf6' }}>{iterA.new_score.toFixed(4)}</span>
+                  <span className="metric-val" style={{ color: '#8b5cf6' }}>{iterB.new_score.toFixed(4)}</span>
+                </div>
+                
+                <div className="compare-metric-row">
+                  <span className="metric-label">Composite Score</span>
+                  <span className="metric-val" style={{ color: '#10b981' }}>
+                    {(iterA.composite_score !== undefined && iterA.composite_score !== null ? iterA.composite_score : iterA.new_score).toFixed(4)}
+                  </span>
+                  <span className="metric-val" style={{ color: '#10b981' }}>
+                    {(iterB.composite_score !== undefined && iterB.composite_score !== null ? iterB.composite_score : iterB.new_score).toFixed(4)}
+                  </span>
+                </div>
+                
+                <div className="compare-metric-row">
+                  <span className="metric-label">Avg Latency</span>
+                  <span className="metric-val">{iterA.avg_latency_ms > 0 ? `${iterA.avg_latency_ms.toFixed(0)}ms` : '---'}</span>
+                  <span className="metric-val">{iterB.avg_latency_ms > 0 ? `${iterB.avg_latency_ms.toFixed(0)}ms` : '---'}</span>
+                </div>
+                
+                <div className="compare-metric-row">
+                  <span className="metric-label">Token Cost</span>
+                  <span className="metric-val">{iterA.total_tokens > 0 ? iterA.total_tokens.toLocaleString() : '---'}</span>
+                  <span className="metric-val">{iterB.total_tokens > 0 ? iterB.total_tokens.toLocaleString() : '---'}</span>
+                </div>
+              </div>
+              
+              {/* Parameter Table */}
+              <div className="compare-config-section">
+                <div className="compare-section-title" style={{ marginBottom: '0.5rem' }}>Pipeline Parameters</div>
+                <table className="compare-config-table">
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: 'left' }}>Parameter</th>
+                      <th>Iter #{iterA.iteration_number} Config</th>
+                      <th>Iter #{iterB.iteration_number} Config</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {renderConfigCompareRow('Chunk Size', 'chunk_size')}
+                    {renderConfigCompareRow('Chunk Overlap', 'chunk_overlap')}
+                    {renderConfigCompareRow('Top K', 'top_k')}
+                    {renderConfigCompareRow('Temperature', 'temperature')}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

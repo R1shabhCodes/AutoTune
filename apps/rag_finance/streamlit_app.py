@@ -149,6 +149,8 @@ def main():
                 st.markdown(msg["content"])
             else:
                 st.markdown(f"""<div class="answer-box">{msg['content']}</div>""", unsafe_allow_html=True)
+                if msg.get("grounding_passed") == False:
+                    st.warning(f"⚠️ **Warning: Ungrounded figures detected.** The following numbers could not be verified in the sources: **{', '.join(msg.get('ungrounded_numbers', []))}**. Please verify this calculation.")
                 if "sources" in msg and msg["sources"]:
                     with st.expander("📚 Sources Used", expanded=False):
                         for i, source in enumerate(msg["sources"]):
@@ -173,6 +175,10 @@ def main():
             # Display answer
             st.markdown(f"""<div class="answer-box">{result['answer']}</div>""", unsafe_allow_html=True)
 
+            # Display warning banner if grounding check fails
+            if not result['grounding_passed']:
+                st.warning(f"⚠️ **Warning: Ungrounded figures detected.** The following numbers could not be verified in the sources: **{', '.join(result['ungrounded_numbers'])}**. Please verify this calculation.")
+
             # Display sources
             with st.expander("📚 Sources Used", expanded=False):
                 for i, source in enumerate(result["sources"]):
@@ -186,7 +192,9 @@ def main():
             st.session_state.messages.append({
                 "role": "assistant",
                 "content": result['answer'],
-                "sources": result['sources']
+                "sources": result['sources'],
+                "grounding_passed": result['grounding_passed'],
+                "ungrounded_numbers": result['ungrounded_numbers']
             })
 
     # Sample questions

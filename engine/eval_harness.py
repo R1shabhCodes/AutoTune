@@ -96,7 +96,10 @@ def evaluate_dataset(config: dict, filename: str) -> dict:
         total_score += question_score
         
         citation_present = "[source:" in answer_lower
-        print(f"[{idx+1}/{len(eval_set)}] Score: {question_score:.2f} | Citation: {citation_present} | Question: {question}")
+        
+        # Run heuristic grounding check
+        grounding_passed, ungrounded_numbers = rag_pipeline.verify_grounding(generated_answer, chunks, question)
+        print(f"[{idx+1}/{len(eval_set)}] Score: {question_score:.2f} | Citation: {citation_present} | Grounded: {grounding_passed} | Question: {question}")
         
         results.append({
             "question": question,
@@ -111,6 +114,8 @@ def evaluate_dataset(config: dict, filename: str) -> dict:
             "retrieval_ms": round(retrieval_ms, 1),
             "generation_ms": round(generation_ms, 1),
             "tokens": question_tokens,
+            "grounding_passed": grounding_passed,
+            "ungrounded_numbers": ungrounded_numbers,
         })
         
     num_questions = len(eval_set) if eval_set else 1
@@ -119,7 +124,10 @@ def evaluate_dataset(config: dict, filename: str) -> dict:
     avg_retrieval_ms = total_retrieval_ms / num_questions
     avg_generation_ms = total_generation_ms / num_questions
     
-    print(f"Evaluation Complete ({filename}). Aggregate Score: {aggregate_score:.4f} | Avg Latency: {avg_latency_ms:.0f}ms")
+    grounding_passed_count = sum(1 for r in results if r["grounding_passed"])
+    grounding_rate = grounding_passed_count / num_questions
+    
+    print(f"Evaluation Complete ({filename}). Aggregate Score: {aggregate_score:.4f} | Avg Latency: {avg_latency_ms:.0f}ms | Grounding: {grounding_rate*100:.1f}%")
     
     return {
         "aggregate_score": aggregate_score,
@@ -127,6 +135,7 @@ def evaluate_dataset(config: dict, filename: str) -> dict:
         "avg_retrieval_ms": round(avg_retrieval_ms, 1),
         "avg_generation_ms": round(avg_generation_ms, 1),
         "total_tokens": total_tokens,
+        "grounding_rate": round(grounding_rate, 4),
         "results": results
     }
 

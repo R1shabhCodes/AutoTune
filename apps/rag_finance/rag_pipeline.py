@@ -281,6 +281,73 @@ def generate(query: str, chunks: list[dict], prompt_template: str, temperature: 
         return f"Error: {e}"
 
 
+def verify_grounding(answer: str, context_chunks: list, question: str) -> tuple[bool, list]:
+    """
+    Checks if all numbers/percentages/monetary values in the LLM's answer
+    exist in the retrieved context chunks or the user's question.
+    
+    Returns: (is_grounded, list_of_ungrounded_numbers)
+    """
+    # 1. Clean citations (e.g., [1], [Source: ...]) to avoid checking citation numbers
+    clean_answer = re.sub(r'\[[^\]]*\]', ' ', answer)
+    
+    # 2. Extract number tokens: digits, commas, periods, optional %, lakh, cr, etc.
+    tokens = re.findall(r'\b\d+(?:[,\.]\d+)*(?:\s*(?:lakh|%|lpa|cr))?\b', clean_answer.lower())
+    
+    # Combine all context text and user question into one normalized string
+    context_texts = []
+    for chunk in context_chunks:
+        if isinstance(chunk, dict):
+            context_texts.append(chunk.get("text", "").lower())
+        else:
+            context_texts.append(str(chunk).lower())
+    context_str = " ".join(context_texts) + " " + question.lower()
+    
+    def check_presence(tok):
+        if tok in context_str:
+            return True
+            
+        tok_clean = tok.replace(",", "")
+        if tok_clean in context_str:
+            return True
+            
+        if "." in tok:
+            try:
+                val = float(tok.replace(" lakh", "").replace("%", ""))
+                if val.is_integer() and str(int(val)) in context_str:
+                    return True
+            except ValueError:
+                pass
+                
+        if "lakh" in tok:
+            try:
+                num_part = float(tok.split("lakh")[0].strip())
+                val_int = int(num_part * 100000)
+                val_formatted = f"{val_int:,}"
+                if str(val_int) in context_str or val_formatted in context_str:
+                    return True
+            except ValueError:
+                pass
+                
+        if "%" in tok:
+            tok_num = tok.replace("%", "").strip()
+            if tok_num in context_str:
+                return True
+                
+        return False
+
+    ungrounded = []
+    for tok in tokens:
+        # Ignore generic small numbers that are too common
+        if tok.strip() in ["0", "1", "2", "3", "4", "5"]:
+            continue
+            
+        if not check_presence(tok):
+            ungrounded.append(tok)
+            
+    return (len(ungrounded) == 0, list(set(ungrounded)))
+
+
 # ── High-level query ─────────────────────────────────────────────────────────
 def query(question: str, config: dict = None) -> dict:
     """End-to-end RAG query: retrieve context then generate answer."""
@@ -295,11 +362,16 @@ def query(question: str, config: dict = None) -> dict:
         prompt_template=config.get("prompt_template", "Context: {context}\n\nQuestion: {question}\n\nAnswer:"),
         temperature=float(config.get("temperature", 0.0)),
     )
+    
+    grounding_passed, ungrounded_numbers = verify_grounding(answer, chunks, question)
+    
     return {
         "question": question,
         "answer": answer,
         "sources": chunks,
         "config_used": config,
+        "grounding_passed": grounding_passed,
+        "ungrounded_numbers": ungrounded_numbers,
     }
 
 
