@@ -1,6 +1,6 @@
 # 🚀 AutoTune: A Self-Improving Hyperparameter Optimizer for RAG Pipelines
 
-> **AutoTune** is an automated optimization loop—inspired by Andrej Karpathy's `autoresearch`—that autonomously tunes a RAG pipeline's hyperparameters by formulating hypotheses, executing experiment runs against a benchmark evaluation set, and persistently keeping only the changes that mathematically improve the accuracy score. 
+> **AutoTune** is an automated optimization loop that autonomously tunes a RAG pipeline's hyperparameters by formulating hypotheses, executing experiment runs against a benchmark evaluation set, and persistently keeping only the changes that mathematically improve the accuracy score. 
 >
 > To demonstrate its efficacy in a real-world scenario, this repository contains **RAG-Finance**, a production-style question-answering system over Indian tax slabs, GST council circulars, RBI monetary policy reports, and the Union Budget 2024.
 
@@ -66,7 +66,7 @@ graph TD
         Streamlit -->|Answers User| AppPipe[apps/rag_finance/rag_pipeline.py]
     end
 
-    Save -.->|Manual Copy of Best Config| ConfigJson
+    Save -->|Automatic Sync| ConfigJson
 ```
 
 ---
@@ -80,13 +80,23 @@ graph TD
 
 ---
 
+## ✨ Core Features & Enhancements
+
+* **Held-out Evaluation Set**: Evaluates against a deterministic 70/30 split (tuning/holdout sets) to prove true generalization and prevent overfitting.
+* **Failure-Aware Prompt Optimization**: Feeds evaluation failures directly back to the optimizer, allowing the agent to target its hypotheses to fix specific failing queries.
+* **Automated Parameter Syncing**: Seamlessly writes accepted configuration changes back to the production application config on the fly.
+* **Citation Grounding**: Target application chunks documents paragraph-by-paragraph and returns inline source document and section citations.
+* **Exportable Reports**: Generates self-contained Markdown reports of the optimization run with statistics, parameters, and progression charts.
+
+---
+
 ## 🛠️ Tech Stack
 
 * **Backend Engine**: Python 3.10+, FastAPI, WebSockets
 * **Frontend Dashboard**: React, Vite, Tailwind CSS, Lucide icons
 * **Vector Search**: ChromaDB (Persistent local instance)
 * **Embedding Model**: `sentence-transformers/all-MiniLM-L6-v2` (Running locally)
-* **LLM Engine**: Local Ollama (`qwen2.5:1.5b` or `llama3.2`) with failover support to Google Gemini API
+* **LLM Engine**: Local Ollama models with failover support to Google Gemini API
 * **App GUI**: Streamlit
 
 ---
@@ -118,10 +128,7 @@ pip install -r apps/rag_finance/requirements.txt
 ```
 
 ### 2. Run the AutoTune Optimizer
-Make sure **Ollama** is open and running, then pull the model:
-```powershell
-ollama pull qwen2.5:1.5b
-```
+Make sure **Ollama** is open and running with your local model loaded.
 
 Launch the FastAPI backend server:
 ```powershell

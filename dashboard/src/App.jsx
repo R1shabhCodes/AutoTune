@@ -1,15 +1,29 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Play, Activity, Settings, CheckCircle2, XCircle, Info, RefreshCw } from 'lucide-react';
+import { Play, Activity, Settings, CheckCircle2, XCircle, Info, RefreshCw, Download } from 'lucide-react';
 
 export default function App() {
   const [iterations, setIterations] = useState([]);
   const [status, setStatus] = useState('idle');
   const [bestConfig, setBestConfig] = useState(null);
+  const [holdoutScore, setHoldoutScore] = useState(null);
   const [runCount, setRunCount] = useState(15);
   const [errorMsg, setErrorMsg] = useState(null);
   
   const wsRef = useRef(null);
+
+  // Helper to fetch holdout score
+  const fetchHoldoutScore = async () => {
+    try {
+      const res = await fetch('/holdout_score');
+      if (res.ok) {
+        const data = await res.json();
+        setHoldoutScore(data.score);
+      }
+    } catch (err) {
+      console.error('Error fetching holdout score:', err);
+    }
+  };
 
   // Helper to fetch history
   const fetchIterations = async () => {
@@ -31,6 +45,7 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setBestConfig(data);
+        fetchHoldoutScore();
       }
     } catch (err) {
       console.error('Error fetching best config:', err);
@@ -90,6 +105,7 @@ export default function App() {
     // Load initial data
     fetchIterations();
     fetchBestConfig();
+    fetchHoldoutScore();
 
     return () => {
       ws.close();
@@ -209,6 +225,14 @@ export default function App() {
                 </>
               )}
             </button>
+            <button 
+              className="btn-secondary"
+              onClick={() => { window.location.href = '/report/current'; }}
+              disabled={status === 'running' || iterations.length === 0}
+              title="Download Markdown Report"
+            >
+              <Download size={16} /> Report
+            </button>
           </div>
           {errorMsg && <p style={{ color: '#ef4444', fontSize: '0.8rem', marginTop: '0.25rem' }}>{errorMsg}</p>}
         </div>
@@ -218,9 +242,17 @@ export default function App() {
           <h2 className="section-title"><Activity size={16} /> Current Best Config</h2>
           {bestConfig ? (
             <div className="best-config-content">
-              <div className="best-score-display">
-                <span className="best-score-val">{bestConfig.score.toFixed(4)}</span>
-                <span className="best-score-label">accuracy score</span>
+              <div className="score-split-container" style={{ display: 'flex', gap: '1.5rem', marginBottom: '1rem', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.75rem' }}>
+                <div className="best-score-display" style={{ flex: 1 }}>
+                  <span className="best-score-val" style={{ fontSize: '1.8rem' }}>{bestConfig.score.toFixed(4)}</span>
+                  <span className="best-score-label" style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Tuning Score</span>
+                </div>
+                <div className="best-score-display" style={{ flex: 1, borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: '1.5rem' }}>
+                  <span className="best-score-val" style={{ fontSize: '1.8rem', color: '#06b6d4' }}>
+                    {holdoutScore !== null ? holdoutScore.toFixed(4) : '---'}
+                  </span>
+                  <span className="best-score-label" style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Holdout Score</span>
+                </div>
               </div>
               <div className="config-grid">
                 <div className="config-item">
@@ -343,6 +375,12 @@ export default function App() {
                     <p className="feed-hypothesis">
                       &ldquo;{item.hypothesis}&rdquo;
                     </p>
+                  )}
+
+                  {item.motivated_by && item.iteration_number > 0 && (
+                    <div className="feed-motivated-by" style={{ margin: '0.2rem 0 0.5rem 0', fontSize: '0.72rem', color: '#38bdf8', background: 'rgba(56, 189, 248, 0.05)', border: '1px solid rgba(56, 189, 248, 0.15)', padding: '0.15rem 0.4rem', borderRadius: '4px', display: 'inline-block', lineHeight: '1.2' }}>
+                      <span style={{ fontWeight: 600 }}>Targeting:</span> {item.motivated_by.split(' | ').join(', ')}
+                    </div>
                   )}
 
                   <div className="feed-change-grid">

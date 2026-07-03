@@ -2,7 +2,10 @@
 # FastAPI application backend that serves the API, WebSocket stream, and dashboard static files.
 # This file is fixed and is NOT modified by the optimization agent.
 
+import sys
 import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import sqlite3
 import asyncio
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks
@@ -11,6 +14,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import agent_loop
 import config
+
+# Run database setup and migrations on boot
+agent_loop.init_db()
 
 app = FastAPI(title="AutoTune RAG Optimizer", description="Dashboard & API for the self-improving RAG pipeline")
 
@@ -115,7 +121,7 @@ def get_iterations_endpoint():
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT iteration_number, hypothesis, param, old_value, new_value, old_score, new_score, accepted, timestamp
+        SELECT iteration_number, hypothesis, param, old_value, new_value, old_score, new_score, accepted, timestamp, motivated_by
         FROM iterations
         ORDER BY iteration_number DESC
     """)
@@ -145,6 +151,35 @@ def get_best_config_endpoint():
         "score": best_score,
         "config": config.CONFIG
     }
+
+@app.get("/holdout_score")
+def get_holdout_score_endpoint():
+    """Runs the current best configuration against the holdout evaluation set and returns the score."""
+    import importlib
+    importlib.reload(config)
+    import eval_harness
+    
+    res = eval_harness.evaluate_holdout(config.CONFIG)
+    return {
+        "score": res["aggregate_score"],
+        "results": res["results"]
+    }
+
+@app.get("/report/{run_id}")
+def get_report_endpoint(run_id: str):
+    """Generates the Markdown optimization report and returns it as a file download."""
+    import report
+    import datetime
+    from fastapi.responses import Response
+    report_md = report.generate_report(run_id)
+    filename = f"autotune_report_{run_id}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+    return Response(
+        content=report_md,
+        media_type="text/markdown",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}"
+        }
+    )
 
 # Mount the static React build files if they exist (dashboard/dist)
 dist_path = os.path.join(os.path.dirname(engine_dir), "dashboard", "dist")

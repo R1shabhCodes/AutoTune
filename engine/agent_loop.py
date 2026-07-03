@@ -2,7 +2,10 @@
 # Core optimization loop that proposes config changes, evaluates them, and logs results.
 # This file is fixed and is NOT modified by the optimization agent.
 
+import sys
 import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import json
 import sqlite3
 import datetime
@@ -16,7 +19,7 @@ engine_dir = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(engine_dir, "autotune.db")
 
 def init_db():
-    """Initializes the SQLite database with the iterations table."""
+    """Initializes the SQLite database with the iterations table and column updates."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
@@ -29,19 +32,25 @@ def init_db():
             old_score REAL,
             new_score REAL,
             accepted INTEGER,
-            timestamp TEXT
+            timestamp TEXT,
+            motivated_by TEXT
         )
     """)
+    # Add motivated_by column if it doesn't exist (backward-compatibility migration)
+    try:
+        cursor.execute("ALTER TABLE iterations ADD COLUMN motivated_by TEXT")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     conn.close()
 
-def log_iteration(iter_num: int, hypothesis: str, param: str, old_val: str, new_val: str, old_score: float, new_score: float, accepted: bool):
+def log_iteration(iter_num: int, hypothesis: str, param: str, old_val: str, new_val: str, old_score: float, new_score: float, accepted: bool, motivated_by: str = ""):
     """Inserts a new optimization iteration record into the SQLite database."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO iterations (iteration_number, hypothesis, param, old_value, new_value, old_score, new_score, accepted, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO iterations (iteration_number, hypothesis, param, old_value, new_value, old_score, new_score, accepted, timestamp, motivated_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         iter_num,
         hypothesis,
@@ -51,7 +60,8 @@ def log_iteration(iter_num: int, hypothesis: str, param: str, old_val: str, new_
         old_score,
         new_score,
         1 if accepted else 0,
-        datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        motivated_by
     ))
     conn.commit()
     conn.close()
@@ -70,9 +80,8 @@ def get_history(limit: int = 10) -> list:
     rows = cursor.fetchall()
     conn.close()
     return [dict(r) for r in reversed(rows)]
-
 def save_config(new_config: dict):
-    """Saves the configuration dictionary back to config.py."""
+    """Saves the configuration dictionary back to config.py and syncs it with apps/rag_finance/config.json."""
     content = f"""# config.py
 # Current configuration for AutoTune RAG pipeline
 # This file is programmatically read and updated by agent_loop.py
@@ -82,6 +91,17 @@ CONFIG = {repr(new_config)}
     config_path = os.path.join(engine_dir, "config.py")
     with open(config_path, "w", encoding="utf-8") as f:
         f.write(content)
+        
+    # Also save to apps/rag_finance/config.json to sync the production application
+    target_config_path = os.path.abspath(os.path.join(engine_dir, "..", "apps", "rag_finance", "config.json"))
+    if os.path.exists(os.path.dirname(target_config_path)):
+        try:
+            with open(target_config_path, "w", encoding="utf-8") as f:
+                json.dump(new_config, f, indent=2)
+            print(f"Synced best config to target app at {target_config_path}")
+        except Exception as e:
+            print(f"Failed to sync config to target app: {e}")
+
 
 def call_llm_json(prompt: str, system_prompt: str) -> dict:
     """
@@ -150,7 +170,7 @@ def call_llm_json(prompt: str, system_prompt: str) -> dict:
             print(f"Ollama proposal generation error: {e}")
             raise e
 
-def generate_proposal(current_config: dict, history: list) -> dict:
+def generate_proposal(current_config: dict, history: list, last_eval_results: list = None) -> dict:
     """Uses LLM to generate a param tuning proposal, with retry/fallback mechanism."""
     # Read persona instructions
     program_path = os.path.join(engine_dir, "program.md")
@@ -160,6 +180,17 @@ def generate_proposal(current_config: dict, history: list) -> dict:
     # Format the current state and history
     prompt = f"Here is the CURRENT config of the RAG system:\n"
     prompt += json.dumps(current_config, indent=2) + "\n\n"
+    
+    # Extract failing questions if present
+    if last_eval_results:
+        failing_questions = [r for r in last_eval_results if not r.get("passed", False)]
+        if failing_questions:
+            prompt += "Here are some of the FAILING questions from the current configuration:\n"
+            for idx, f in enumerate(failing_questions[:3]):
+                prompt += f"Failure {idx+1}:\n"
+                prompt += f"  - Question: {f['question']}\n"
+                prompt += f"  - Expected keywords: {f['expected']}\n"
+                prompt += f"  - RAG actual answer: {f['actual_answer']}\n\n"
     
     if history:
         prompt += "Here is the HISTORY of previous trials:\n"
@@ -220,6 +251,9 @@ async def run_optimization(num_iterations: int, on_iteration_callback=None):
     """
     init_db()
     
+    # Track the last evaluation results to inject failures into proposal prompt
+    last_eval_results = []
+    
     # 1. Evaluate baseline first (Iteration 0)
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -230,10 +264,15 @@ async def run_optimization(num_iterations: int, on_iteration_callback=None):
     importlib.reload(config)
     current_config = config.CONFIG.copy()
     
-    if not has_baseline:
+    if has_baseline:
+        print("Running evaluation on current best config to identify failing questions...")
+        current_res = eval_harness.evaluate_config(current_config)
+        last_eval_results = current_res["results"]
+    else:
         print("--- Running Baseline Evaluation (Iteration 0) ---")
         baseline_res = eval_harness.evaluate_config(current_config)
         baseline_score = baseline_res["aggregate_score"]
+        last_eval_results = baseline_res["results"]
         
         log_iteration(
             iter_num=0,
@@ -243,7 +282,8 @@ async def run_optimization(num_iterations: int, on_iteration_callback=None):
             new_val="None",
             old_score=0.0,
             new_score=baseline_score,
-            accepted=True
+            accepted=True,
+            motivated_by=""
         )
         
         if on_iteration_callback:
@@ -256,7 +296,8 @@ async def run_optimization(num_iterations: int, on_iteration_callback=None):
                 "old_score": 0.0,
                 "new_score": baseline_score,
                 "accepted": 1,
-                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "motivated_by": ""
             })
     
     # Get current best score
@@ -276,7 +317,7 @@ async def run_optimization(num_iterations: int, on_iteration_callback=None):
         # 1. Fetch history from DB
         history = get_history(limit=10)
         
-        # 2. Get LLM Proposal
+        # 2. Get LLM Proposal (passing the previous failure results)
         gemini_key = os.environ.get("GEMINI_API_KEY")
         env_path = os.path.join(engine_dir, ".env")
         if not gemini_key and os.path.exists(env_path):
@@ -290,7 +331,15 @@ async def run_optimization(num_iterations: int, on_iteration_callback=None):
         if gemini_key:
             import time
             time.sleep(4.0)
-        proposal = generate_proposal(current_config, history)
+        
+        # Extract targeted questions for logging
+        motivated_by_str = ""
+        if last_eval_results:
+            failing_qs = [r for r in last_eval_results if not r.get("passed", False)]
+            if failing_qs:
+                motivated_by_str = " | ".join([f["question"] for f in failing_qs[:3]])
+
+        proposal = generate_proposal(current_config, history, last_eval_results)
         param = proposal.get("param")
         hypothesis = proposal.get("hypothesis", "No hypothesis provided.")
         raw_new_val = proposal.get("new_value")
@@ -299,7 +348,7 @@ async def run_optimization(num_iterations: int, on_iteration_callback=None):
         new_val = clean_value(param, raw_new_val)
         if new_val is None:
             print(f"Skipping iteration {i}: Invalid value proposed for '{param}': {raw_new_val}")
-            log_iteration(i, f"Rejected due to invalid parameter value: {raw_new_val}", param or "None", current_config.get(param, "N/A"), str(raw_new_val), current_best_score, current_best_score, False)
+            log_iteration(i, f"Rejected due to invalid parameter value: {raw_new_val}", param or "None", current_config.get(param, "N/A"), str(raw_new_val), current_best_score, current_best_score, False, motivated_by_str)
             if on_iteration_callback:
                 await on_iteration_callback({
                     "iteration_number": i,
@@ -310,7 +359,8 @@ async def run_optimization(num_iterations: int, on_iteration_callback=None):
                     "old_score": current_best_score,
                     "new_score": current_best_score,
                     "accepted": 0,
-                    "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "motivated_by": motivated_by_str
                 })
             continue
             
@@ -322,7 +372,7 @@ async def run_optimization(num_iterations: int, on_iteration_callback=None):
         
         if proposed_overlap >= proposed_chunk_size:
             print(f"Skipping iteration {i}: Proposed overlap {proposed_overlap} >= size {proposed_chunk_size}")
-            log_iteration(i, f"Rejected due to chunk_overlap ({proposed_overlap}) >= chunk_size ({proposed_chunk_size})", param, old_val, new_val, current_best_score, current_best_score, False)
+            log_iteration(i, f"Rejected due to chunk_overlap ({proposed_overlap}) >= chunk_size ({proposed_chunk_size})", param, old_val, new_val, current_best_score, current_best_score, False, motivated_by_str)
             if on_iteration_callback:
                 await on_iteration_callback({
                     "iteration_number": i,
@@ -333,7 +383,8 @@ async def run_optimization(num_iterations: int, on_iteration_callback=None):
                     "old_score": current_best_score,
                     "new_score": current_best_score,
                     "accepted": 0,
-                    "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "motivated_by": motivated_by_str
                 })
             continue
 
@@ -349,7 +400,7 @@ async def run_optimization(num_iterations: int, on_iteration_callback=None):
             new_score = eval_res["aggregate_score"]
         except Exception as e:
             print(f"Evaluation crashed for proposed config: {e}")
-            log_iteration(i, f"Evaluation crashed: {str(e)}", param, old_val, new_val, current_best_score, current_best_score, False)
+            log_iteration(i, f"Evaluation crashed: {str(e)}", param, old_val, new_val, current_best_score, current_best_score, False, motivated_by_str)
             continue
             
         # 5. Decide (Accept if score improves)
@@ -361,6 +412,8 @@ async def run_optimization(num_iterations: int, on_iteration_callback=None):
             current_config = proposed_config
             # Save the new current configuration to config.py
             save_config(current_config)
+            # Update failure results for the next iteration
+            last_eval_results = eval_res["results"]
         else:
             print(f">>> Proposal REJECTED (Score {new_score:.4f} did not outperform current best {current_best_score:.4f})")
             
@@ -371,9 +424,10 @@ async def run_optimization(num_iterations: int, on_iteration_callback=None):
             param=param,
             old_val=old_val,
             new_val=new_val,
-            old_score=current_best_score if accepted else current_best_score, # wait, old score is the best score before this change
+            old_score=current_best_score if accepted else current_best_score,
             new_score=new_score,
-            accepted=accepted
+            accepted=accepted,
+            motivated_by=motivated_by_str
         )
         
         # 7. Notify via callback
@@ -384,10 +438,11 @@ async def run_optimization(num_iterations: int, on_iteration_callback=None):
                 "param": param,
                 "old_value": str(old_val),
                 "new_value": str(new_val),
-                "old_score": current_best_score if accepted else current_best_score, # before this iteration's evaluation
+                "old_score": current_best_score if accepted else current_best_score,
                 "new_score": new_score,
                 "accepted": 1 if accepted else 0,
-                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "motivated_by": motivated_by_str
             })
             
     print("\n--- Optimization Run Finished ---")
