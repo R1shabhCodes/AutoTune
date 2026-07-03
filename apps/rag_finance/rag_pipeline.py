@@ -3,11 +3,13 @@
 # Uses sentence-transformers for embeddings, ChromaDB for vector store, Ollama for generation.
 
 import os
+import re
 import json
 import glob
 import shutil
 import chromadb
 from sentence_transformers import SentenceTransformer
+from rank_bm25 import BM25Okapi
 
 # ── Globals ──────────────────────────────────────────────────────────────────
 CORPUS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "documents")
@@ -18,6 +20,12 @@ OLLAMA_MODEL = "qwen2.5:1.5b"
 
 _embed_model = None
 
+# BM25 index globals (rebuilt on each build_index call)
+_bm25_index = None
+_bm25_corpus_chunks = []   # list of chunk text strings
+_bm25_corpus_metas = []    # list of metadata dicts (source, section, paragraph_index)
+_bm25_tokenized = []       # tokenized version for BM25
+
 
 def _get_embed_model():
     """Lazy-load the sentence-transformer model."""
@@ -26,6 +34,11 @@ def _get_embed_model():
         print(f"Loading embedding model ('{EMBED_MODEL_NAME}')...")
         _embed_model = SentenceTransformer(EMBED_MODEL_NAME)
     return _embed_model
+
+
+def _tokenize(text: str) -> list:
+    """Simple whitespace + punctuation tokenizer for BM25."""
+    return re.findall(r'\w+', text.lower())
 
 
 # ── Config helpers ───────────────────────────────────────────────────────────
@@ -99,7 +112,9 @@ def load_corpus(chunk_size: int = 200, chunk_overlap: int = 20) -> tuple[list[st
 
 # ── Indexing ─────────────────────────────────────────────────────────────────
 def build_index(chunk_size: int = 200, chunk_overlap: int = 20):
-    """Build (or rebuild) the ChromaDB vector index from corpus files."""
+    """Build (or rebuild) the ChromaDB vector index and BM25 keyword index from corpus files."""
+    global _bm25_index, _bm25_corpus_chunks, _bm25_corpus_metas, _bm25_tokenized
+    
     client = chromadb.PersistentClient(path=CHROMA_DIR)
     
     collection = client.get_or_create_collection("finance_docs")
@@ -118,12 +133,22 @@ def build_index(chunk_size: int = 200, chunk_overlap: int = 20):
 
     ids = [f"chunk_{i}" for i in range(len(chunks))]
     collection.add(ids=ids, documents=chunks, embeddings=embeddings, metadatas=metas)
+    
+    # Build BM25 index from the same chunks
+    _bm25_corpus_chunks = chunks
+    _bm25_corpus_metas = metas
+    _bm25_tokenized = [_tokenize(t) for t in chunks]
+    if _bm25_tokenized:
+        _bm25_index = BM25Okapi(_bm25_tokenized)
+    else:
+        _bm25_index = None
+    
     print(f"Index built: {len(chunks)} chunks indexed.")
 
 
 # ── Retrieval ────────────────────────────────────────────────────────────────
-def retrieve(query: str, top_k: int = 3) -> list[dict]:
-    """Retrieve the top-k most relevant chunks for a query."""
+def retrieve_vector(query: str, top_k: int = 3) -> list[dict]:
+    """Retrieve the top-k most relevant chunks using vector similarity."""
     model = _get_embed_model()
     query_embedding = model.encode([query], show_progress_bar=False).tolist()
 
@@ -142,6 +167,84 @@ def retrieve(query: str, top_k: int = 3) -> list[dict]:
             "distance": results["distances"][0][i] if results.get("distances") else None,
         })
     return retrieved
+
+
+def retrieve_bm25(query: str, top_k: int = 3) -> list[dict]:
+    """Retrieve the top-k most relevant chunks using BM25 keyword matching."""
+    global _bm25_index, _bm25_corpus_chunks, _bm25_corpus_metas
+    
+    if _bm25_index is None or not _bm25_corpus_chunks:
+        return []
+    
+    tokenized_query = _tokenize(query)
+    scores = _bm25_index.get_scores(tokenized_query)
+    
+    # Get top-k indices sorted by score descending
+    top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
+    
+    retrieved = []
+    for i in top_indices:
+        if scores[i] > 0:
+            meta = _bm25_corpus_metas[i]
+            retrieved.append({
+                "text": _bm25_corpus_chunks[i],
+                "source": meta.get("source", "unknown"),
+                "section": meta.get("section", "Introduction"),
+                "paragraph_index": meta.get("paragraph_index", 0),
+                "distance": round(1.0 / (1.0 + scores[i]), 4),  # Convert BM25 score to distance-like metric
+            })
+    return retrieved
+
+
+def retrieve_hybrid(query: str, top_k: int = 3) -> list[dict]:
+    """
+    Hybrid retrieval using Reciprocal Rank Fusion (RRF).
+    Runs both vector search and BM25, fuses results using RRF formula:
+      score(doc) = sum(1 / (k + rank)) across retrievers
+    """
+    RRF_K = 60  # Standard RRF constant
+    
+    # Fetch more candidates from each retriever, then fuse down to top_k
+    fetch_k = min(top_k * 2, 20)
+    
+    vector_results = retrieve_vector(query, fetch_k)
+    bm25_results = retrieve_bm25(query, fetch_k)
+    
+    # Compute RRF scores using text prefix as dedup key
+    rrf_scores = {}
+    doc_map = {}
+    
+    for rank, doc in enumerate(vector_results):
+        doc_key = doc["text"][:200]
+        rrf_scores[doc_key] = rrf_scores.get(doc_key, 0) + 1.0 / (RRF_K + rank + 1)
+        if doc_key not in doc_map:
+            doc_map[doc_key] = doc
+    
+    for rank, doc in enumerate(bm25_results):
+        doc_key = doc["text"][:200]
+        rrf_scores[doc_key] = rrf_scores.get(doc_key, 0) + 1.0 / (RRF_K + rank + 1)
+        if doc_key not in doc_map:
+            doc_map[doc_key] = doc
+    
+    # Sort by RRF score and return top_k
+    sorted_keys = sorted(rrf_scores.keys(), key=lambda k: rrf_scores[k], reverse=True)[:top_k]
+    
+    return [doc_map[k] for k in sorted_keys]
+
+
+def retrieve(query: str, top_k: int = 3, strategy: str = "vector") -> list[dict]:
+    """
+    Retrieve the top-k most relevant chunks using the specified strategy.
+    
+    Args:
+        strategy: One of 'vector', 'keyword', 'hybrid'
+    """
+    if strategy == "keyword":
+        return retrieve_bm25(query, top_k)
+    elif strategy == "hybrid":
+        return retrieve_hybrid(query, top_k)
+    else:
+        return retrieve_vector(query, top_k)
 
 
 # ── Generation (Ollama) ─────────────────────────────────────────────────────
@@ -184,7 +287,8 @@ def query(question: str, config: dict = None) -> dict:
     if config is None:
         config = load_config()
 
-    chunks = retrieve(question, top_k=int(config.get("top_k", 3)))
+    strategy = config.get("retrieval_strategy", "vector")
+    chunks = retrieve(question, top_k=int(config.get("top_k", 3)), strategy=strategy)
     answer = generate(
         query=question,
         chunks=chunks,

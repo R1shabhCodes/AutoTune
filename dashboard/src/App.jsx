@@ -135,12 +135,19 @@ export default function App() {
   // Process data for Recharts (requires oldest first)
   const chartData = [...iterations]
     .sort((a, b) => a.iteration_number - b.iteration_number)
-    .map((item) => ({
-      iteration: item.iteration_number,
-      score: parseFloat(item.new_score.toFixed(4)),
-      param: item.param,
-      accepted: item.accepted
-    }));
+    .map((item) => {
+      const newScoreVal = typeof item.new_score === 'number' ? item.new_score : parseFloat(item.new_score) || 0;
+      const compositeVal = typeof item.composite_score === 'number' ? item.composite_score : parseFloat(item.composite_score) || 0;
+      const latencyVal = typeof item.avg_latency_ms === 'number' ? item.avg_latency_ms : parseFloat(item.avg_latency_ms) || 0;
+      return {
+        iteration: item.iteration_number,
+        score: parseFloat(newScoreVal.toFixed(4)),
+        composite: parseFloat(compositeVal.toFixed(4)),
+        latency: latencyVal,
+        param: item.param,
+        accepted: item.accepted
+      };
+    });
 
   // Custom tool tip for chart
   const CustomTooltip = ({ active, payload }) => {
@@ -153,11 +160,27 @@ export default function App() {
           padding: '0.75rem',
           borderRadius: '8px',
           color: '#f3f4f6',
-          fontSize: '0.85rem'
+          fontSize: '0.85rem',
+          minWidth: '220px'
         }}>
-          <p style={{ fontWeight: 600 }}>Iteration {data.iteration}</p>
-          <p style={{ color: '#10b981' }}>Score: {data.score}</p>
-          {data.param !== 'None' && (
+          <p style={{ fontWeight: 600, borderBottom: '1px solid rgba(255, 255, 255, 0.1)', paddingBottom: '0.25rem', marginBottom: '0.5rem' }}>Iteration {data.iteration}</p>
+          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+            <div>
+              <span style={{ fontSize: '0.7rem', color: '#9ca3af', display: 'block' }}>Accuracy</span>
+              <span style={{ color: '#8b5cf6', fontWeight: 600 }}>{data.score}</span>
+            </div>
+            <div>
+              <span style={{ fontSize: '0.7rem', color: '#9ca3af', display: 'block' }}>Composite</span>
+              <span style={{ color: '#10b981', fontWeight: 600 }}>{data.composite}</span>
+            </div>
+            {data.latency > 0 && (
+              <div>
+                <span style={{ fontSize: '0.7rem', color: '#9ca3af', display: 'block' }}>Latency</span>
+                <span style={{ color: '#ec4899', fontWeight: 600 }}>{data.latency.toFixed(0)}ms</span>
+              </div>
+            )}
+          </div>
+          {data.param && data.param !== 'None' && (
             <p style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>
               Tuned: <span style={{ color: '#06b6d4', fontFamily: 'monospace' }}>{data.param}</span>
             </p>
@@ -166,7 +189,7 @@ export default function App() {
             fontSize: '0.75rem',
             color: data.accepted ? '#10b981' : '#ef4444',
             fontWeight: 500,
-            marginTop: '0.15rem'
+            marginTop: '0.25rem'
           }}>
             {data.accepted ? 'Accepted ✓' : 'Rejected ✗'}
           </p>
@@ -242,16 +265,40 @@ export default function App() {
           <h2 className="section-title"><Activity size={16} /> Current Best Config</h2>
           {bestConfig ? (
             <div className="best-config-content">
-              <div className="score-split-container" style={{ display: 'flex', gap: '1.5rem', marginBottom: '1rem', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.75rem' }}>
-                <div className="best-score-display" style={{ flex: 1 }}>
-                  <span className="best-score-val" style={{ fontSize: '1.8rem' }}>{bestConfig.score.toFixed(4)}</span>
-                  <span className="best-score-label" style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Tuning Score</span>
-                </div>
-                <div className="best-score-display" style={{ flex: 1, borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: '1.5rem' }}>
-                  <span className="best-score-val" style={{ fontSize: '1.8rem', color: '#06b6d4' }}>
-                    {holdoutScore !== null ? holdoutScore.toFixed(4) : '---'}
+              <div className="best-metrics-row">
+                <div className="best-metric-item">
+                  <span className="best-metric-val">
+                    {typeof bestConfig.score === 'number' ? bestConfig.score.toFixed(4) : '---'}
                   </span>
-                  <span className="best-score-label" style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Holdout Score</span>
+                  <span className="best-metric-label">Tuning Accuracy</span>
+                </div>
+                <div className="best-metric-item">
+                  <span className="best-metric-val" style={{ color: 'var(--status-green)' }}>
+                    {typeof bestConfig.composite_score === 'number' ? bestConfig.composite_score.toFixed(4) : '---'}
+                  </span>
+                  <span className="best-metric-label">Composite Score</span>
+                </div>
+                <div className="best-metric-item">
+                  <span className="best-metric-val" style={{ color: '#06b6d4' }}>
+                    {holdoutScore !== null && holdoutScore !== undefined ? holdoutScore.toFixed(4) : '---'}
+                  </span>
+                  <span className="best-metric-label">Holdout Accuracy</span>
+                </div>
+                <div className="best-metric-item">
+                  <span className="best-metric-val" style={{ color: '#ec4899' }}>
+                    {typeof bestConfig.avg_latency_ms === 'number' && bestConfig.avg_latency_ms > 0
+                      ? `${bestConfig.avg_latency_ms.toFixed(0)}ms`
+                      : '---'}
+                  </span>
+                  <span className="best-metric-label">Avg Latency</span>
+                </div>
+                <div className="best-metric-item">
+                  <span className="best-metric-val" style={{ color: '#eab308' }}>
+                    {typeof bestConfig.total_tokens === 'number' && bestConfig.total_tokens > 0
+                      ? bestConfig.total_tokens.toLocaleString()
+                      : '---'}
+                  </span>
+                  <span className="best-metric-label">Total Tokens</span>
                 </div>
               </div>
               <div className="config-grid">
@@ -322,23 +369,47 @@ export default function App() {
                   <Line 
                     type="monotone" 
                     dataKey="score" 
-                    stroke="var(--accent-purple)" 
-                    strokeWidth={3}
+                    name="Accuracy"
+                    stroke="#8b5cf6" 
+                    strokeWidth={1.5}
+                    strokeDasharray="5 5"
                     dot={(props) => {
                       const { cx, cy, payload } = props;
-                      if (payload.iteration === 0) return null; // hide baseline dot if desired
+                      if (!payload || payload.iteration === 0) return null;
                       return (
                         <circle 
-                          key={payload.iteration}
+                          key={`${payload.iteration}-accuracy-dot`}
                           cx={cx} 
                           cy={cy} 
-                          r={4} 
+                          r={3.5} 
                           fill={payload.accepted ? 'var(--status-green)' : 'var(--status-red)'}
                           stroke="none"
                         />
                       );
                     }}
-                    activeDot={{ r: 6, strokeWidth: 0 }}
+                    activeDot={{ r: 5, strokeWidth: 0 }}
+                  />
+                  <Line 
+                    type="monotone" 
+                    dataKey="composite" 
+                    name="Composite Score"
+                    stroke="#10b981" 
+                    strokeWidth={3.5}
+                    dot={(props) => {
+                      const { cx, cy, payload } = props;
+                      if (!payload || payload.iteration === 0) return null;
+                      return (
+                        <circle 
+                          key={`${payload.iteration}-composite-dot`}
+                          cx={cx} 
+                          cy={cy} 
+                          r={4.5} 
+                          fill={payload.accepted ? 'var(--status-green)' : 'var(--status-red)'}
+                          stroke="none"
+                        />
+                      );
+                    }}
+                    activeDot={{ r: 6.5, strokeWidth: 0 }}
                   />
                 </LineChart>
               </ResponsiveContainer>
@@ -356,61 +427,110 @@ export default function App() {
           <h2 className="section-title">Iteration Log</h2>
           <div className="feed-wrapper">
             {iterations.length > 0 ? (
-              iterations.map((item) => (
-                <div 
-                  key={item.iteration_number} 
-                  className={`feed-item ${item.accepted ? 'accepted' : 'rejected'}`}
-                >
-                  <div className="feed-item-header">
-                    <span className="feed-item-title">
-                      Iteration #{item.iteration_number}
-                      <span className={`badge ${item.accepted ? 'accepted' : 'rejected'}`}>
-                        {item.accepted ? 'Accepted' : 'Rejected'}
+              iterations.map((item) => {
+                // Determine scores for progression
+                const newAcc = item.new_score;
+                const newComp = item.composite_score !== undefined && item.composite_score !== null 
+                  ? item.composite_score 
+                  : item.new_score;
+                  
+                let oldAcc = item.old_score;
+                let oldComp = item.old_score; // fallback
+                
+                if (item.iteration_number > 0) {
+                  // Find the previous accepted iteration to show real progress
+                  const prevAccepted = iterations.find(
+                    (it) => it.iteration_number < item.iteration_number && it.accepted
+                  );
+                  if (prevAccepted) {
+                    oldAcc = prevAccepted.new_score;
+                    oldComp = prevAccepted.composite_score !== undefined && prevAccepted.composite_score !== null
+                      ? prevAccepted.composite_score
+                      : prevAccepted.new_score;
+                  }
+                }
+
+                return (
+                  <div 
+                    key={item.iteration_number} 
+                    className={`feed-item ${item.accepted ? 'accepted' : 'rejected'}`}
+                  >
+                    <div className="feed-item-header">
+                      <span className="feed-item-title">
+                        Iteration #{item.iteration_number}
+                        <span className={`badge ${item.accepted ? 'accepted' : 'rejected'}`}>
+                          {item.accepted ? 'Accepted' : 'Rejected'}
+                        </span>
+                        {typeof item.avg_latency_ms === 'number' && item.avg_latency_ms > 0 && (
+                          <span className="feed-header-badge latency-badge">
+                            ⚡ {item.avg_latency_ms.toFixed(0)}ms
+                          </span>
+                        )}
+                        {typeof item.total_tokens === 'number' && item.total_tokens > 0 && (
+                          <span className="feed-header-badge token-badge">
+                            🪙 {item.total_tokens} tokens
+                          </span>
+                        )}
                       </span>
-                    </span>
-                    <span className="feed-timestamp">{item.timestamp}</span>
+                      <span className="feed-timestamp">{item.timestamp}</span>
+                    </div>
+
+                    {item.hypothesis && item.iteration_number > 0 && (
+                      <p className="feed-hypothesis">
+                        &ldquo;{item.hypothesis}&rdquo;
+                      </p>
+                    )}
+
+                    {item.motivated_by && item.iteration_number > 0 && (
+                      <div className="feed-motivated-by" style={{ margin: '0.2rem 0 0.5rem 0', fontSize: '0.72rem', color: '#38bdf8', background: 'rgba(56, 189, 248, 0.05)', border: '1px solid rgba(56, 189, 248, 0.15)', padding: '0.15rem 0.4rem', borderRadius: '4px', display: 'inline-block', lineHeight: '1.2' }}>
+                        <span style={{ fontWeight: 600 }}>Targeting:</span> {item.motivated_by.split(' | ').join(', ')}
+                      </div>
+                    )}
+
+                    <div className="feed-change-grid">
+                      <div className="param-diff">
+                        {item.iteration_number === 0 ? (
+                          <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Baseline Setup</span>
+                        ) : (
+                          <>
+                            <span className="param-name">{item.param}</span>:
+                            <span className="diff-old">{item.old_value}</span>
+                            <span>&rarr;</span>
+                            <span className="diff-new">{item.new_value}</span>
+                          </>
+                        )}
+                      </div>
+                      
+                      <div className="scores-diff-container">
+                        <div className={`score-progress ${item.accepted ? 'improved' : ''}`}>
+                          <span className="score-diff-label">Acc:</span>
+                          {item.iteration_number === 0 ? (
+                            <span>{newAcc.toFixed(4)}</span>
+                          ) : (
+                            <>
+                              <span>{oldAcc.toFixed(3)}</span>
+                              <span>&rarr;</span>
+                              <span>{newAcc.toFixed(3)}</span>
+                            </>
+                          )}
+                        </div>
+                        <div className={`score-progress ${item.accepted ? 'improved' : ''}`}>
+                          <span className="score-diff-label">Comp:</span>
+                          {item.iteration_number === 0 ? (
+                            <span>{newComp.toFixed(4)}</span>
+                          ) : (
+                            <>
+                              <span>{oldComp.toFixed(3)}</span>
+                              <span>&rarr;</span>
+                              <span>{newComp.toFixed(3)}</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                   </div>
-
-                  {item.hypothesis && item.iteration_number > 0 && (
-                    <p className="feed-hypothesis">
-                      &ldquo;{item.hypothesis}&rdquo;
-                    </p>
-                  )}
-
-                  {item.motivated_by && item.iteration_number > 0 && (
-                    <div className="feed-motivated-by" style={{ margin: '0.2rem 0 0.5rem 0', fontSize: '0.72rem', color: '#38bdf8', background: 'rgba(56, 189, 248, 0.05)', border: '1px solid rgba(56, 189, 248, 0.15)', padding: '0.15rem 0.4rem', borderRadius: '4px', display: 'inline-block', lineHeight: '1.2' }}>
-                      <span style={{ fontWeight: 600 }}>Targeting:</span> {item.motivated_by.split(' | ').join(', ')}
-                    </div>
-                  )}
-
-                  <div className="feed-change-grid">
-                    <div className="param-diff">
-                      {item.iteration_number === 0 ? (
-                        <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Baseline Setup</span>
-                      ) : (
-                        <>
-                          <span className="param-name">{item.param}</span>:
-                          <span className="diff-old">{item.old_value}</span>
-                          <span>&rarr;</span>
-                          <span className="diff-new">{item.new_value}</span>
-                        </>
-                      )}
-                    </div>
-                    
-                    <div className={`score-progress ${item.accepted ? 'improved' : ''}`}>
-                      {item.iteration_number === 0 ? (
-                        <span>Score: {item.new_score.toFixed(4)}</span>
-                      ) : (
-                        <>
-                          <span>{item.old_score.toFixed(3)}</span>
-                          <span>&rarr;</span>
-                          <span>{item.new_score.toFixed(3)}</span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))
+                );
+              })
             ) : (
               <div className="empty-feed">
                 <span className="empty-icon">📋</span>

@@ -121,7 +121,7 @@ def get_iterations_endpoint():
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT iteration_number, hypothesis, param, old_value, new_value, old_score, new_score, accepted, timestamp, motivated_by
+        SELECT iteration_number, hypothesis, param, old_value, new_value, old_score, new_score, accepted, timestamp, motivated_by, avg_latency_ms, total_tokens, composite_score
         FROM iterations
         ORDER BY iteration_number DESC
     """)
@@ -131,24 +131,41 @@ def get_iterations_endpoint():
 
 @app.get("/best")
 def get_best_config_endpoint():
-    """Returns the current best configuration and its evaluation score."""
+    """Returns the current best configuration and its evaluation score/metrics."""
     # Ensure config is loaded fresh from file
     import importlib
     importlib.reload(config)
     
     best_score = 0.0
+    best_composite = 0.0
+    best_latency = 0.0
+    best_tokens = 0
+    
     if os.path.exists(DB_PATH):
         conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        # Find the maximum score achieved in any accepted iteration
-        cursor.execute("SELECT MAX(new_score) FROM iterations WHERE accepted = 1")
-        val = cursor.fetchone()[0]
-        if val is not None:
-            best_score = val
+        # Find the latest accepted iteration to get its metrics
+        cursor.execute("""
+            SELECT new_score, composite_score, avg_latency_ms, total_tokens 
+            FROM iterations 
+            WHERE accepted = 1 
+            ORDER BY iteration_number DESC 
+            LIMIT 1
+        """)
+        row = cursor.fetchone()
+        if row:
+            best_score = row["new_score"]
+            best_composite = row["composite_score"] if row["composite_score"] is not None else row["new_score"]
+            best_latency = row["avg_latency_ms"] if row["avg_latency_ms"] is not None else 0.0
+            best_tokens = row["total_tokens"] if row["total_tokens"] is not None else 0
         conn.close()
         
     return {
         "score": best_score,
+        "composite_score": best_composite,
+        "avg_latency_ms": best_latency,
+        "total_tokens": best_tokens,
         "config": config.CONFIG
     }
 

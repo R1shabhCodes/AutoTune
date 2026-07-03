@@ -26,7 +26,7 @@ def generate_report(run_id: str = "current") -> str:
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT iteration_number, hypothesis, param, old_value, new_value, old_score, new_score, accepted, timestamp, motivated_by
+        SELECT iteration_number, hypothesis, param, old_value, new_value, old_score, new_score, accepted, timestamp, motivated_by, avg_latency_ms, total_tokens, composite_score
         FROM iterations
         ORDER BY iteration_number ASC
     """)
@@ -39,14 +39,19 @@ def generate_report(run_id: str = "current") -> str:
     iterations = [dict(r) for r in rows]
     baseline = iterations[0]
     
-    # Identify the best score and its corresponding iteration config
+    # Identify the best iteration config (based on composite score if available, else new_score)
     best_iteration = baseline
     for item in iterations:
-        if item["accepted"] and item["new_score"] >= best_iteration["new_score"]:
+        item_comp = item.get("composite_score") if item.get("composite_score") is not None else item["new_score"]
+        best_comp = best_iteration.get("composite_score") if best_iteration.get("composite_score") is not None else best_iteration["new_score"]
+        if item["accepted"] and item_comp >= best_comp:
             best_iteration = item
             
     starting_score = baseline["new_score"]
     final_score = best_iteration["new_score"]
+    final_latency = best_iteration.get("avg_latency_ms") or 0.0
+    final_tokens = best_iteration.get("total_tokens") or 0
+    final_composite = best_iteration.get("composite_score") or final_score
     total_runs = len(iterations) - 1  # Excluding baseline (0)
     
     # Calculate current holdout score using the active best configuration
@@ -66,27 +71,29 @@ def generate_report(run_id: str = "current") -> str:
         import matplotlib.pyplot as plt
         
         x = [item["iteration_number"] for item in iterations]
-        y = [item["new_score"] for item in iterations]
+        y_score = [item["new_score"] for item in iterations]
+        y_composite = [item.get("composite_score") if item.get("composite_score") is not None else item["new_score"] for item in iterations]
         
         plt.figure(figsize=(9, 4.5))
         plt.style.use('dark_background')
         
-        # Plot score curve
-        plt.plot(x, y, color='#818cf8', marker='o', linewidth=2.5, markersize=4, label='Accuracy Progression')
+        # Plot score curves
+        plt.plot(x, y_score, color='#818cf8', linestyle='--', linewidth=1.5, label='Accuracy')
+        plt.plot(x, y_composite, color='#10b981', marker='o', linewidth=2.5, markersize=4, label='Composite Score')
         
         # Color-code accepted vs rejected markers
         accepted_x = [item["iteration_number"] for item in iterations if item["accepted"] and item["iteration_number"] > 0]
-        accepted_y = [item["new_score"] for item in iterations if item["accepted"] and item["iteration_number"] > 0]
+        accepted_y = [item.get("composite_score") if item.get("composite_score") is not None else item["new_score"] for item in iterations if item["accepted"] and item["iteration_number"] > 0]
         plt.scatter(accepted_x, accepted_y, color='#10b981', s=70, zorder=5, label='Accepted Config')
         
         rejected_x = [item["iteration_number"] for item in iterations if not item["accepted"] and item["iteration_number"] > 0]
-        rejected_y = [item["new_score"] for item in iterations if not item["accepted"] and item["iteration_number"] > 0]
+        rejected_y = [item.get("composite_score") if item.get("composite_score") is not None else item["new_score"] for item in iterations if not item["accepted"] and item["iteration_number"] > 0]
         if rejected_x:
             plt.scatter(rejected_x, rejected_y, color='#ef4444', s=70, zorder=5, label='Rejected Config')
             
-        plt.title('AutoTune Score Progression Trajectory', fontsize=12, pad=15, color='#e2e8f0', fontweight='bold')
+        plt.title('AutoTune Multi-Objective Optimization Progression', fontsize=12, pad=15, color='#e2e8f0', fontweight='bold')
         plt.xlabel('Iteration Number', color='#94a3b8', fontsize=9)
-        plt.ylabel('Tuning Accuracy Score', color='#94a3b8', fontsize=9)
+        plt.ylabel('Score Metric', color='#94a3b8', fontsize=9)
         plt.ylim(-0.05, 1.05)
         plt.grid(True, linestyle='--', alpha=0.15, color='#334155')
         plt.legend(frameon=True, facecolor='#1e293b', edgecolor='none', loc='lower right', fontsize=8)
@@ -103,12 +110,13 @@ def generate_report(run_id: str = "current") -> str:
         # Build text-based ASCII chart
         chart_ascii = "\n### Score Progression Chart (ASCII Fallback)\n```text\n"
         for item in iterations:
-            bar_len = int(item["new_score"] * 25)
+            item_comp = item.get("composite_score") if item.get("composite_score") is not None else item["new_score"]
+            bar_len = int(item_comp * 25)
             bar = "█" * bar_len + "░" * (25 - bar_len)
             status = " [OK]" if item["accepted"] else " [REJECTED]"
             if item["iteration_number"] == 0:
                 status = " [BASELINE]"
-            chart_ascii += f"Iter #{item['iteration_number']:2d} ({item['new_score']:.4f}) | {bar} |{status}\n"
+            chart_ascii += f"Iter #{item['iteration_number']:2d} (Comp: {item_comp:.4f} | Acc: {item['new_score']:.4f}) | {bar} |{status}\n"
         chart_ascii += "```\n"
 
     # Assemble Markdown text
@@ -118,6 +126,9 @@ def generate_report(run_id: str = "current") -> str:
 - **Generated On**: {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 - **Total Optimization Loops**: {total_runs} iterations
 - **Tuning Set Accuracy**: **{final_score * 100:.1f}%** (Starting: {starting_score * 100:.1f}%)
+- **Tuning Set Avg Latency**: **{final_latency:.0f}ms**
+- **Tuning Set Total Tokens**: **{final_tokens} tokens**
+- **Composite Score (Accuracy/Latency/Cost)**: **{final_composite:.4f}**
 - **Holdout Set Accuracy**: **{holdout_score_val * 100:.1f}%**
 - **Model Backend**: Dual Ollama + Gemini API (Auto-Detect Mode)
 
@@ -134,8 +145,8 @@ def generate_report(run_id: str = "current") -> str:
 ## 🔄 Log of Accepted Tuning Changes
 Below are the parameter modifications that were approved and committed by the optimizer:
 
-| Iteration | Parameter | Modification | Score Trajectory | Targeted Failing Questions |
-| :---: | :--- | :--- | :---: | :--- |
+| Iteration | Parameter | Modification | Accuracy | Latency | Composite Score | Targeted Failing Questions |
+| :---: | :--- | :--- | :---: | :---: | :---: | :--- |
 """
     for item in iterations:
         if item["accepted"] and item["iteration_number"] > 0:
@@ -145,7 +156,9 @@ Below are the parameter modifications that were approved and committed by the op
                 failures = item["motivated_by"].split(" | ")[0]
                 if len(failures) > 85:
                     failures = failures[:82] + "..."
-            md += f"| {item['iteration_number']} | `{item['param']}` | `{item['old_value']}` &rarr; `{item['new_value']}` | {item['old_score']:.3f} &rarr; {item['new_score']:.3f} | *\"{failures}\"* |\n"
+            item_comp = item.get("composite_score") if item.get("composite_score") is not None else item["new_score"]
+            old_comp = item.get("old_score") # fallback if old composite doesn't exist
+            md += f"| {item['iteration_number']} | `{item['param']}` | `{item['old_value']}` &rarr; `{item['new_value']}` | {item['old_score']:.3f} &rarr; {item['new_score']:.3f} | {item.get('avg_latency_ms', 0):.0f}ms | {item_comp:.4f} | *\"{failures}\"* |\n"
 
     # Print hypotheses for all accepted configurations
     md += "\n### Accepted Hypotheses:\n"

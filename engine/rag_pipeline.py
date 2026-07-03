@@ -3,15 +3,22 @@
 # This file is fixed and is NOT modified by the optimization agent.
 
 import os
+import re
 import glob
 import json
 import urllib.request
 import urllib.error
 import chromadb
 from sentence_transformers import SentenceTransformer
+from rank_bm25 import BM25Okapi
 
 # Cache embedding model to avoid reloading on every function call
 _embedding_model = None
+
+# BM25 index globals (rebuilt on each build_index call)
+_bm25_index = None
+_bm25_corpus_chunks = []   # list of chunk text strings
+_bm25_tokenized = []       # tokenized version for BM25
 
 def get_embedding_model():
     """Singleton to load and cache the local sentence-transformer model."""
@@ -20,6 +27,10 @@ def get_embedding_model():
         print("Loading local sentence-transformer model ('all-MiniLM-L6-v2')...")
         _embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
     return _embedding_model
+
+def _tokenize(text: str) -> list:
+    """Simple whitespace + punctuation tokenizer for BM25."""
+    return re.findall(r'\w+', text.lower())
 
 def chunk_text(text: str, chunk_size: int, chunk_overlap: int) -> list:
     """Splits a document text into overlapping character-level chunks."""
@@ -50,8 +61,10 @@ def chunk_text(text: str, chunk_size: int, chunk_overlap: int) -> list:
 def build_index(chunk_size: int, chunk_overlap: int):
     """
     Reads all text files in the corpus directory, chunks them,
-    computes embeddings, and stores them in a local ChromaDB collection.
+    computes embeddings, stores them in ChromaDB, and builds BM25 index.
     """
+    global _bm25_index, _bm25_corpus_chunks, _bm25_tokenized
+    
     engine_dir = os.path.dirname(os.path.abspath(__file__))
     corpus_dir = os.path.join(engine_dir, "corpus")
     if not os.path.exists(corpus_dir):
@@ -106,17 +119,25 @@ def build_index(chunk_size: int, chunk_overlap: int):
         embeddings=embeddings,
         metadatas=metadatas
     )
+    
+    # Build BM25 index from the same chunks
+    _bm25_corpus_chunks = texts
+    _bm25_tokenized = [_tokenize(t) for t in texts]
+    if _bm25_tokenized:
+        _bm25_index = BM25Okapi(_bm25_tokenized)
+    else:
+        _bm25_index = None
+    
     print(f"Index built successfully. Indexed {len(chunks)} chunks from {len(text_files)} files.")
 
-def retrieve(query: str, top_k: int) -> list:
-    """Retrieves the top_k most relevant chunks from the ChromaDB index."""
+def retrieve_vector(query: str, top_k: int) -> list:
+    """Retrieves the top_k most relevant chunks using vector similarity (ChromaDB)."""
     engine_dir = os.path.dirname(os.path.abspath(__file__))
     chroma_path = os.path.join(engine_dir, "chroma_db")
     client = chromadb.PersistentClient(path=chroma_path)
     try:
         collection = client.get_collection("autotune_rag")
     except Exception:
-        # If collection doesn't exist, return empty context
         print("Warning: ChromaDB collection 'autotune_rag' does not exist. Run build_index first.")
         return []
         
@@ -131,6 +152,72 @@ def retrieve(query: str, top_k: int) -> list:
     if results and "documents" in results and results["documents"]:
         return results["documents"][0]
     return []
+
+def retrieve_bm25(query: str, top_k: int) -> list:
+    """Retrieves the top_k most relevant chunks using BM25 keyword matching."""
+    global _bm25_index, _bm25_corpus_chunks
+    
+    if _bm25_index is None or not _bm25_corpus_chunks:
+        return []
+    
+    tokenized_query = _tokenize(query)
+    scores = _bm25_index.get_scores(tokenized_query)
+    
+    # Get top-k indices sorted by score descending
+    top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
+    
+    return [_bm25_corpus_chunks[i] for i in top_indices if scores[i] > 0]
+
+def retrieve_hybrid(query: str, top_k: int) -> list:
+    """
+    Hybrid retrieval using Reciprocal Rank Fusion (RRF).
+    Runs both vector search and BM25, fuses results using RRF formula:
+      score(doc) = sum(1 / (k + rank)) across retrievers
+    """
+    RRF_K = 60  # Standard RRF constant
+    
+    # Fetch more candidates from each retriever, then fuse down to top_k
+    fetch_k = min(top_k * 2, 20)
+    
+    vector_results = retrieve_vector(query, fetch_k)
+    bm25_results = retrieve_bm25(query, fetch_k)
+    
+    # Compute RRF scores
+    rrf_scores = {}
+    
+    for rank, doc in enumerate(vector_results):
+        doc_key = doc[:200]  # Use prefix as dedup key
+        rrf_scores[doc_key] = rrf_scores.get(doc_key, 0) + 1.0 / (RRF_K + rank + 1)
+    
+    for rank, doc in enumerate(bm25_results):
+        doc_key = doc[:200]
+        rrf_scores[doc_key] = rrf_scores.get(doc_key, 0) + 1.0 / (RRF_K + rank + 1)
+    
+    # Build a map from key -> full doc text
+    doc_map = {}
+    for doc in vector_results + bm25_results:
+        doc_key = doc[:200]
+        if doc_key not in doc_map:
+            doc_map[doc_key] = doc
+    
+    # Sort by RRF score and return top_k
+    sorted_keys = sorted(rrf_scores.keys(), key=lambda k: rrf_scores[k], reverse=True)[:top_k]
+    
+    return [doc_map[k] for k in sorted_keys]
+
+def retrieve(query: str, top_k: int, strategy: str = "vector") -> list:
+    """
+    Retrieves the top_k most relevant chunks using the specified strategy.
+    
+    Args:
+        strategy: One of 'vector', 'keyword', 'hybrid'
+    """
+    if strategy == "keyword":
+        return retrieve_bm25(query, top_k)
+    elif strategy == "hybrid":
+        return retrieve_hybrid(query, top_k)
+    else:
+        return retrieve_vector(query, top_k)
 
 def call_llm(prompt: str, temperature: float, system_prompt: str = None) -> str:
     """
