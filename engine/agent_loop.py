@@ -18,6 +18,20 @@ import eval_harness
 engine_dir = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(engine_dir, "autotune.db")
 
+# Multi-objective optimization weights
+W_ACCURACY = 0.7
+W_LATENCY = 0.2
+W_TOKENS = 0.1
+LATENCY_BUDGET_MS = 5000.0  # 5 seconds budget per question
+TOKEN_BUDGET = 2000         # token budget per question
+
+def compute_composite_score(accuracy: float, avg_latency_ms: float, total_tokens: int, num_questions: int) -> float:
+    """Computes a weighted composite score from accuracy, latency, and token usage."""
+    latency_score = max(0.0, 1.0 - avg_latency_ms / LATENCY_BUDGET_MS)
+    avg_tokens = total_tokens / max(num_questions, 1)
+    token_score = max(0.0, 1.0 - avg_tokens / TOKEN_BUDGET)
+    return round(W_ACCURACY * accuracy + W_LATENCY * latency_score + W_TOKENS * token_score, 4)
+
 def init_db():
     """Initializes the SQLite database with the iterations table and column updates."""
     conn = sqlite3.connect(DB_PATH)
@@ -36,21 +50,28 @@ def init_db():
             motivated_by TEXT
         )
     """)
-    # Add motivated_by column if it doesn't exist (backward-compatibility migration)
-    try:
-        cursor.execute("ALTER TABLE iterations ADD COLUMN motivated_by TEXT")
-    except sqlite3.OperationalError:
-        pass
+    # Schema migrations for backward-compatibility
+    migrations = [
+        "ALTER TABLE iterations ADD COLUMN motivated_by TEXT",
+        "ALTER TABLE iterations ADD COLUMN avg_latency_ms REAL",
+        "ALTER TABLE iterations ADD COLUMN total_tokens INTEGER",
+        "ALTER TABLE iterations ADD COLUMN composite_score REAL",
+    ]
+    for sql in migrations:
+        try:
+            cursor.execute(sql)
+        except sqlite3.OperationalError:
+            pass
     conn.commit()
     conn.close()
 
-def log_iteration(iter_num: int, hypothesis: str, param: str, old_val: str, new_val: str, old_score: float, new_score: float, accepted: bool, motivated_by: str = ""):
+def log_iteration(iter_num: int, hypothesis: str, param: str, old_val: str, new_val: str, old_score: float, new_score: float, accepted: bool, motivated_by: str = "", avg_latency_ms: float = 0.0, total_tokens: int = 0, composite_score: float = 0.0):
     """Inserts a new optimization iteration record into the SQLite database."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO iterations (iteration_number, hypothesis, param, old_value, new_value, old_score, new_score, accepted, timestamp, motivated_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO iterations (iteration_number, hypothesis, param, old_value, new_value, old_score, new_score, accepted, timestamp, motivated_by, avg_latency_ms, total_tokens, composite_score)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         iter_num,
         hypothesis,
@@ -61,7 +82,10 @@ def log_iteration(iter_num: int, hypothesis: str, param: str, old_val: str, new_
         new_score,
         1 if accepted else 0,
         datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        motivated_by
+        motivated_by,
+        avg_latency_ms,
+        total_tokens,
+        composite_score
     ))
     conn.commit()
     conn.close()
@@ -238,6 +262,11 @@ def clean_value(param: str, value):
             if "{context}" not in val_str or "{question}" not in val_str:
                 raise ValueError("Prompt template missing placeholders")
             return val_str
+        elif param in ["retrieval_strategy"]:
+            val_str = str(value).lower().strip()
+            if val_str not in ["vector", "keyword", "hybrid"]:
+                raise ValueError(f"Invalid retrieval strategy: {val_str}. Must be one of: vector, keyword, hybrid")
+            return val_str
     except Exception as e:
         print(f"Error cleaning param {param} value {value}: {e}")
         return None
@@ -300,11 +329,17 @@ async def run_optimization(num_iterations: int, on_iteration_callback=None):
                 "motivated_by": ""
             })
     
-    # Get current best score
+    # Get current best score and compute initial composite
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT new_score FROM iterations ORDER BY iteration_number DESC LIMIT 1")
     current_best_score = cursor.fetchone()[0]
+    
+    # Compute initial composite score from the baseline/current evaluation
+    baseline_latency = current_res.get("avg_latency_ms", 0.0) if has_baseline and 'current_res' in dir() else 0.0
+    baseline_tokens = current_res.get("total_tokens", 0) if has_baseline and 'current_res' in dir() else 0
+    baseline_num_q = len(current_res.get("results", [])) if has_baseline and 'current_res' in dir() else 1
+    current_best_composite = compute_composite_score(current_best_score, baseline_latency, baseline_tokens, baseline_num_q)
     
     # Find next iteration index
     cursor.execute("SELECT MAX(iteration_number) FROM iterations")
@@ -398,24 +433,29 @@ async def run_optimization(num_iterations: int, on_iteration_callback=None):
         try:
             eval_res = eval_harness.evaluate_config(proposed_config)
             new_score = eval_res["aggregate_score"]
+            new_latency = eval_res.get("avg_latency_ms", 0.0)
+            new_tokens = eval_res.get("total_tokens", 0)
+            num_questions = len(eval_res.get("results", []))
+            new_composite = compute_composite_score(new_score, new_latency, new_tokens, num_questions)
         except Exception as e:
             print(f"Evaluation crashed for proposed config: {e}")
             log_iteration(i, f"Evaluation crashed: {str(e)}", param, old_val, new_val, current_best_score, current_best_score, False, motivated_by_str)
             continue
             
-        # 5. Decide (Accept if score improves)
-        accepted = new_score > current_best_score
+        # 5. Decide (Accept if composite score improves)
+        accepted = new_composite > current_best_composite
         
         if accepted:
-            print(f">>> Proposal ACCEPTED (Score improved from {current_best_score:.4f} -> {new_score:.4f})")
+            print(f">>> Proposal ACCEPTED (Composite: {current_best_composite:.4f} -> {new_composite:.4f} | Accuracy: {new_score:.4f} | Latency: {new_latency:.0f}ms)")
             current_best_score = new_score
+            current_best_composite = new_composite
             current_config = proposed_config
             # Save the new current configuration to config.py
             save_config(current_config)
             # Update failure results for the next iteration
             last_eval_results = eval_res["results"]
         else:
-            print(f">>> Proposal REJECTED (Score {new_score:.4f} did not outperform current best {current_best_score:.4f})")
+            print(f">>> Proposal REJECTED (Composite {new_composite:.4f} did not outperform current best {current_best_composite:.4f})")
             
         # 6. Log iteration
         log_iteration(
@@ -427,7 +467,10 @@ async def run_optimization(num_iterations: int, on_iteration_callback=None):
             old_score=current_best_score if accepted else current_best_score,
             new_score=new_score,
             accepted=accepted,
-            motivated_by=motivated_by_str
+            motivated_by=motivated_by_str,
+            avg_latency_ms=new_latency,
+            total_tokens=new_tokens,
+            composite_score=new_composite
         )
         
         # 7. Notify via callback
@@ -442,7 +485,10 @@ async def run_optimization(num_iterations: int, on_iteration_callback=None):
                 "new_score": new_score,
                 "accepted": 1 if accepted else 0,
                 "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "motivated_by": motivated_by_str
+                "motivated_by": motivated_by_str,
+                "avg_latency_ms": new_latency,
+                "total_tokens": new_tokens,
+                "composite_score": new_composite
             })
             
     print("\n--- Optimization Run Finished ---")

@@ -3,5 +3,6 @@
   "chunk_overlap": 50,
   "top_k": 5,
   "temperature": 0.0,
+  "retrieval_strategy": "vector",
   "prompt_template": "Answer the following question based on the provided context. If the answer is not in the context, say 'I don't have enough information to answer this question.'\n\nFor every claim or fact you state, you MUST cite the source document inline immediately after the claim, in the format '[Source: <source_filename>, <section_name>]' (for example: '[Source: gst_overview.txt, Types of GST]'). Use ONLY the sources listed in the context. Do not hallucinate any other sources.\n\nContext:\n{context}\n\nQuestion: {question}\n\nAnswer:"
 }
