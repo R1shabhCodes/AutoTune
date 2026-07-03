@@ -213,6 +213,7 @@ export default function App() {
         
         {/* Run Controls */}
         <div className="status-container">
+          <span className="provider-badge">Dual-Model (Gemini/Ollama)</span>
           <div className={`status-dot ${status}`}></div>
           <span className={`status-text ${status}`}>{status}</span>
         </div>
@@ -328,17 +329,6 @@ export default function App() {
               <p style={{ fontSize: '0.85rem' }}>No evaluation completed yet.</p>
             </div>
           )}
-        </div>
-
-        {/* LLM Engine Info Card */}
-        <div className="glass-card api-info-panel">
-          <h2 className="section-title"><Info size={16} /> LLM Provider</h2>
-          <div className="api-badge">
-            <Activity size={12} /> Auto-Detect Mode
-          </div>
-          <p className="api-desc">
-            Uses <strong>Gemini API</strong> (gemini-1.5-flash) if <code>GEMINI_API_KEY</code> is loaded, otherwise falls back to a local <strong>Ollama</strong> instance (llama3.2).
-          </p>
         </div>
       </div>
 
