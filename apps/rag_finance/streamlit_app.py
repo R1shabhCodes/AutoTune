@@ -148,7 +148,15 @@ def main():
             if msg["role"] == "user":
                 st.markdown(msg["content"])
             else:
-                st.markdown(msg["content"], unsafe_allow_html=True)
+                st.markdown(f"""<div class="answer-box">{msg['content']}</div>""", unsafe_allow_html=True)
+                if "sources" in msg and msg["sources"]:
+                    with st.expander("📚 Sources Used", expanded=False):
+                        for i, source in enumerate(msg["sources"]):
+                            st.markdown(f"**[{i+1}] {source['source']}, Section: {source.get('section', 'N/A')} (Paragraph {source.get('paragraph_index', 0) + 1})**")
+                            if source.get('distance') is not None:
+                                st.markdown(f"*Distance: {source['distance']:.4f}*")
+                            st.info(source["text"])
+                            st.markdown("---")
 
     # Chat input
     if prompt := st.chat_input("Ask a finance question... (e.g., 'What is Section 80C?')"):
@@ -166,15 +174,20 @@ def main():
             st.markdown(f"""<div class="answer-box">{result['answer']}</div>""", unsafe_allow_html=True)
 
             # Display sources
-            st.markdown("#### 📚 Retrieved Sources")
-            for i, source in enumerate(result["sources"]):
-                with st.expander(f"Source {i+1}: {source['source']}", expanded=False):
-                    st.markdown(f"**Distance:** {source['distance']:.4f}" if source['distance'] else "")
-                    st.text(source["text"])
+            with st.expander("📚 Sources Used", expanded=False):
+                for i, source in enumerate(result["sources"]):
+                    st.markdown(f"**[{i+1}] {source['source']}, Section: {source.get('section', 'N/A')} (Paragraph {source.get('paragraph_index', 0) + 1})**")
+                    if source.get('distance') is not None:
+                        st.markdown(f"*Distance: {source['distance']:.4f}*")
+                    st.info(source["text"])
+                    st.markdown("---")
 
             # Build response for history
-            response_html = f"""<div class="answer-box">{result['answer']}</div>"""
-            st.session_state.messages.append({"role": "assistant", "content": response_html})
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": result['answer'],
+                "sources": result['sources']
+            })
 
     # Sample questions
     st.markdown("---")

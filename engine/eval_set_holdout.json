@@ -1,0 +1,40 @@
+[
+  {
+    "question": "What is the standard deduction for salaried individuals under the new tax regime?",
+    "expected_answer_contains": [
+      "75,000"
+    ]
+  },
+  {
+    "question": "What is the LTCG exemption limit on listed equity after Budget 2024?",
+    "expected_answer_contains": [
+      "1.25 lakh"
+    ]
+  },
+  {
+    "question": "What is the Statutory Liquidity Ratio in India?",
+    "expected_answer_contains": [
+      "18%"
+    ]
+  },
+  {
+    "question": "What does NAV stand for in mutual funds?",
+    "expected_answer_contains": [
+      "Net Asset Value"
+    ]
+  },
+  {
+    "question": "What is the tax rate for income above 15 lakh under the new regime?",
+    "expected_answer_contains": [
+      "30%"
+    ]
+  },
+  {
+    "question": "What are the types of GST in India?",
+    "expected_answer_contains": [
+      "CGST",
+      "SGST",
+      "IGST"
+    ]
+  }
+]

@@ -4,15 +4,71 @@
     "expected_answer_contains": ["30%"]
   },
   {
+    "question": "What is the maximum deduction allowed under Section 80C?",
+    "expected_answer_contains": ["1.5 lakh"]
+  },
+  {
+    "question": "What is the standard deduction for salaried individuals under the new tax regime?",
+    "expected_answer_contains": ["75,000"]
+  },
+  {
     "question": "What are the types of GST in India?",
     "expected_answer_contains": ["CGST", "SGST", "IGST"]
+  },
+  {
+    "question": "What is the GST rate for IT services and financial services?",
+    "expected_answer_contains": ["18%"]
+  },
+  {
+    "question": "When was GST introduced in India?",
+    "expected_answer_contains": ["2017"]
+  },
+  {
+    "question": "What is the turnover limit for mandatory GST registration for goods suppliers?",
+    "expected_answer_contains": ["40 lakh"]
+  },
+  {
+    "question": "What is the lock-in period for ELSS mutual funds?",
+    "expected_answer_contains": ["3 years"]
   },
   {
     "question": "What does NAV stand for in mutual funds?",
     "expected_answer_contains": ["Net Asset Value"]
   },
   {
+    "question": "What is the minimum SIP amount in most mutual funds?",
+    "expected_answer_contains": ["500"]
+  },
+  {
     "question": "What is the current repo rate set by RBI?",
     "expected_answer_contains": ["6.50"]
+  },
+  {
+    "question": "What is the current Cash Reserve Ratio in India?",
+    "expected_answer_contains": ["4.50"]
+  },
+  {
+    "question": "What is the CPI inflation target set by RBI?",
+    "expected_answer_contains": ["4%"]
+  },
+  {
+    "question": "What was the short-term capital gains tax rate on listed equity changed to in Budget 2024?",
+    "expected_answer_contains": ["20%"]
+  },
+  {
+    "question": "What is the LTCG exemption limit on listed equity after Budget 2024?",
+    "expected_answer_contains": ["1.25 lakh"]
+  },
+  {
+    "question": "What is the fiscal deficit target for FY 2024-25?",
+    "expected_answer_contains": ["4.9%"]
+  },
+  {
+    "question": "What is the additional deduction available under Section 80CCD(1B) for NPS?",
+    "expected_answer_contains": ["50,000"]
+  },
+  {
+    "question": "What is the Statutory Liquidity Ratio in India?",
+    "expected_answer_contains": ["18%"]
   }
 ]

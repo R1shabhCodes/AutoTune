@@ -2,18 +2,17 @@
 # Loads eval_set.json, runs the RAG pipeline with a given config, and computes evaluation score.
 # This file is fixed and is NOT modified by the optimization agent.
 
+import sys
 import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import json
 import rag_pipeline
 
-def evaluate_config(config: dict) -> dict:
-    """
-    Evaluates a specific RAG configuration against the evaluation set.
-    Returns the aggregate score (0-1) and detailed per-question results.
-    """
-    # 1. Load eval set
+def evaluate_dataset(config: dict, filename: str) -> dict:
+    """Helper to evaluate a config against a specific JSON file in engine dir."""
     engine_dir = os.path.dirname(os.path.abspath(__file__))
-    eval_path = os.path.join(engine_dir, "eval_set.json")
+    eval_path = os.path.join(engine_dir, filename)
     if not os.path.exists(eval_path):
         raise FileNotFoundError(f"Evaluation set file not found: {eval_path}")
         
@@ -31,7 +30,7 @@ def evaluate_config(config: dict) -> dict:
     total_score = 0.0
     
     # 3. Evaluate each question
-    print(f"Evaluating {len(eval_set)} questions...")
+    print(f"Evaluating {len(eval_set)} questions from {filename}...")
     for idx, item in enumerate(eval_set):
         question = item["question"]
         expected_list = item["expected_answer_contains"]
@@ -73,22 +72,35 @@ def evaluate_config(config: dict) -> dict:
         question_score = (matched_count / len(expected_list)) if expected_list else 0.0
         total_score += question_score
         
-        print(f"[{idx+1}/{len(eval_set)}] Score: {question_score:.2f} | Question: {question}")
+        citation_present = "[source:" in answer_lower
+        print(f"[{idx+1}/{len(eval_set)}] Score: {question_score:.2f} | Citation: {citation_present} | Question: {question}")
         
         results.append({
             "question": question,
             "expected_terms": expected_list,
+            "expected": expected_list,
             "generated_answer": generated_answer,
-            "score": question_score
+            "actual_answer": generated_answer,
+            "score": question_score,
+            "passed": bool(question_score >= 1.0),
+            "citation_present": citation_present
         })
         
     aggregate_score = (total_score / len(eval_set)) if eval_set else 0.0
-    print(f"Evaluation Complete. Aggregate Score: {aggregate_score:.4f}")
+    print(f"Evaluation Complete ({filename}). Aggregate Score: {aggregate_score:.4f}")
     
     return {
         "aggregate_score": aggregate_score,
         "results": results
     }
+
+def evaluate_config(config: dict) -> dict:
+    """Evaluates a RAG configuration against the tuning evaluation set."""
+    return evaluate_dataset(config, "eval_set_tuning.json")
+
+def evaluate_holdout(config: dict) -> dict:
+    """Evaluates a RAG configuration against the holdout evaluation set (never used during tuning)."""
+    return evaluate_dataset(config, "eval_set_holdout.json")
 
 if __name__ == "__main__":
     # Test evaluation harness using current config.py settings

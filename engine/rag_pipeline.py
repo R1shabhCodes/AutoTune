@@ -87,13 +87,15 @@ def build_index(chunk_size: int, chunk_overlap: int):
     chroma_path = os.path.join(engine_dir, "chroma_db")
     client = chromadb.PersistentClient(path=chroma_path)
     
-    # Delete old collection to prevent index mixing/accumulation across runs
+    collection = client.get_or_create_collection("autotune_rag")
+    
+    # Clean old documents in a single atomic step to avoid stale cached UUIDs
     try:
-        client.delete_collection("autotune_rag")
-    except Exception:
-        pass
-        
-    collection = client.create_collection("autotune_rag")
+        existing = collection.get()
+        if existing and "ids" in existing and existing["ids"]:
+            collection.delete(ids=existing["ids"])
+    except Exception as e:
+        print(f"Warning clearing collection: {e}")
     
     ids = [f"chunk_{i}" for i in range(len(chunks))]
     metadatas = [{"source": c["source"], "index": c["index"]} for c in chunks]
