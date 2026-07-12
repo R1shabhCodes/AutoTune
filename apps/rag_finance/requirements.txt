@@ -1,3 +1,5 @@
 streamlit
 sentence-transformers
 chromadb
+rank-bm25
+pdfplumber

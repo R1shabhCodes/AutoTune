@@ -15,7 +15,7 @@ from rank_bm25 import BM25Okapi
 CORPUS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "documents")
 CHROMA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chroma_db")
 EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
-OLLAMA_URL = "http://localhost:11434"
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = "qwen2.5:1.5b"
 
 _embed_model = None

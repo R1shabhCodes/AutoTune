@@ -266,7 +266,8 @@ def call_llm(prompt: str, temperature: float, system_prompt: str = None) -> str:
             return f"Error calling Gemini API: {str(e)}"
     else:
         # Local LLM: Ollama
-        url = "http://localhost:11434/api/generate"
+        ollama_url = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+        url = f"{ollama_url}/api/generate"
         model = "qwen2.5:1.5b"
         
         # Combine system prompt with main prompt for Ollama since API is /api/generate
