@@ -25,12 +25,19 @@ W_TOKENS = 0.1
 LATENCY_BUDGET_MS = 5000.0  # 5 seconds budget per question
 TOKEN_BUDGET = 2000         # token budget per question
 
-def compute_composite_score(accuracy: float, avg_latency_ms: float, total_tokens: int, num_questions: int) -> float:
-    """Computes a weighted composite score from accuracy, latency, and token usage."""
+def compute_composite_score(accuracy: float, avg_latency_ms: float, total_tokens: int, num_questions: int, grounding_rate: float = 1.0) -> float:
+    """Computes a weighted composite score from accuracy, latency, and token usage, penalized by grounding failures."""
     latency_score = max(0.0, 1.0 - avg_latency_ms / LATENCY_BUDGET_MS)
     avg_tokens = total_tokens / max(num_questions, 1)
     token_score = max(0.0, 1.0 - avg_tokens / TOKEN_BUDGET)
-    return round(W_ACCURACY * accuracy + W_LATENCY * latency_score + W_TOKENS * token_score, 4)
+    
+    # Calculate base composite score
+    base_score = W_ACCURACY * accuracy + W_LATENCY * latency_score + W_TOKENS * token_score
+    
+    # Apply a penalty for ungrounded numbers (hallucinations)
+    grounding_penalty = 0.3 * (1.0 - grounding_rate)
+    
+    return round(max(0.0, base_score - grounding_penalty), 4)
 
 def init_db():
     """Initializes the SQLite database with the iterations table and column updates."""
@@ -339,7 +346,8 @@ async def run_optimization(num_iterations: int, on_iteration_callback=None):
     baseline_latency = current_res.get("avg_latency_ms", 0.0) if has_baseline and 'current_res' in dir() else 0.0
     baseline_tokens = current_res.get("total_tokens", 0) if has_baseline and 'current_res' in dir() else 0
     baseline_num_q = len(current_res.get("results", [])) if has_baseline and 'current_res' in dir() else 1
-    current_best_composite = compute_composite_score(current_best_score, baseline_latency, baseline_tokens, baseline_num_q)
+    baseline_grounding = current_res.get("grounding_rate", 1.0) if has_baseline and 'current_res' in dir() else 1.0
+    current_best_composite = compute_composite_score(current_best_score, baseline_latency, baseline_tokens, baseline_num_q, baseline_grounding)
     
     # Find next iteration index
     cursor.execute("SELECT MAX(iteration_number) FROM iterations")
@@ -436,7 +444,8 @@ async def run_optimization(num_iterations: int, on_iteration_callback=None):
             new_latency = eval_res.get("avg_latency_ms", 0.0)
             new_tokens = eval_res.get("total_tokens", 0)
             num_questions = len(eval_res.get("results", []))
-            new_composite = compute_composite_score(new_score, new_latency, new_tokens, num_questions)
+            new_grounding = eval_res.get("grounding_rate", 1.0)
+            new_composite = compute_composite_score(new_score, new_latency, new_tokens, num_questions, new_grounding)
         except Exception as e:
             print(f"Evaluation crashed for proposed config: {e}")
             log_iteration(i, f"Evaluation crashed: {str(e)}", param, old_val, new_val, current_best_score, current_best_score, False, motivated_by_str)
