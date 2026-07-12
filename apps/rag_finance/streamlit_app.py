@@ -170,7 +170,7 @@ def main():
         # Generate answer
         with st.chat_message("assistant"):
             with st.spinner("🔍 Retrieving and generating..."):
-                result = rag.query(prompt, config)
+                result = rag.query(prompt, config, history=st.session_state.messages[:-1])
 
             # Display answer
             st.markdown(f"""<div class="answer-box">{result['answer']}</div>""", unsafe_allow_html=True)

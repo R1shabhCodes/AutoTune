@@ -296,7 +296,7 @@ def call_llm(prompt: str, temperature: float, system_prompt: str = None) -> str:
         except Exception as e:
             return f"Error calling local Ollama (is it running and does it have model 'llama3.2'?): {str(e)}"
 
-def generate(query: str, chunks: list, prompt_template: str, temperature: float) -> str:
+def generate(query: str, chunks: list, prompt_template: str, temperature: float, history: list = None) -> str:
     """Formats the prompt with retrieved chunks (context) and calls the active LLM."""
     context = "\n\n".join(chunks) if chunks else "No context retrieved."
     prompt = prompt_template.replace("{context}", context).replace("{question}", query)
