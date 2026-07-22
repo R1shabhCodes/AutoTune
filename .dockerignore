@@ -1,0 +1,15 @@
+.venv
+.git
+.gitignore
+node_modules
+dashboard/node_modules
+apps/rag_finance/chroma_db
+engine/chroma_db
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.env
+engine/.env
+C:*
+c:*
