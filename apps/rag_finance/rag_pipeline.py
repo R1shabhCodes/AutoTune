@@ -129,7 +129,8 @@ def build_index(chunk_size: int = 200, chunk_overlap: int = 20):
         
     chunks, metas = load_corpus(chunk_size, chunk_overlap)
     model = _get_embed_model()
-    embeddings = model.encode(chunks, show_progress_bar=False).tolist()
+    print("Embedding chunks using sentence-transformers (this may take a minute)...")
+    embeddings = model.encode(chunks, show_progress_bar=True).tolist()
 
     ids = [f"chunk_{i}" for i in range(len(chunks))]
     collection.add(ids=ids, documents=chunks, embeddings=embeddings, metadatas=metas)
