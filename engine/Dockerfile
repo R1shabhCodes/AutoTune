@@ -7,6 +7,9 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Install CPU-only PyTorch first to reduce download size and prevent timeouts
+RUN pip install torch --index-url https://download.pytorch.org/whl/cpu --no-cache-dir
+
 COPY engine/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
