@@ -11,9 +11,7 @@ pip-log.txt
 pip-delete-this-directory.txt
 
 # Databases and Vector Indices
-autotune.db
 chroma_db/
-engine/autotune.db
 engine/chroma_db/
 apps/rag_finance/chroma_db/
 apps/rag_finance/benchmark_results.json
