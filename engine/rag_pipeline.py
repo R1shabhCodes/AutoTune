@@ -8,8 +8,6 @@ import glob
 import json
 import urllib.request
 import urllib.error
-import chromadb
-from sentence_transformers import SentenceTransformer
 from rank_bm25 import BM25Okapi
 
 # Cache embedding model to avoid reloading on every function call
@@ -24,6 +22,7 @@ def get_embedding_model():
     """Singleton to load and cache the local sentence-transformer model."""
     global _embedding_model
     if _embedding_model is None:
+        from sentence_transformers import SentenceTransformer
         print("Loading local sentence-transformer model ('all-MiniLM-L6-v2')...")
         _embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
     return _embedding_model
@@ -97,6 +96,7 @@ def build_index(chunk_size: int, chunk_overlap: int):
     embeddings = model.encode(texts, show_progress_bar=False).tolist()
     
     # Setup persistent ChromaDB client
+    import chromadb
     chroma_path = os.path.join(engine_dir, "chroma_db")
     client = chromadb.PersistentClient(path=chroma_path)
     
@@ -132,6 +132,7 @@ def build_index(chunk_size: int, chunk_overlap: int):
 
 def retrieve_vector(query: str, top_k: int) -> list:
     """Retrieves the top_k most relevant chunks using vector similarity (ChromaDB)."""
+    import chromadb
     engine_dir = os.path.dirname(os.path.abspath(__file__))
     chroma_path = os.path.join(engine_dir, "chroma_db")
     client = chromadb.PersistentClient(path=chroma_path)

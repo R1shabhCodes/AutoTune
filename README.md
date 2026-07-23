@@ -82,11 +82,16 @@ graph TD
 
 ## ✨ Core Features & Enhancements
 
+* **Hybrid Retrieval (BM25 + Vector + RRF)**: Combines dense vector embeddings with exact-match BM25 keyword rankings using Reciprocal Rank Fusion (RRF) to retrieve highly relevant context.
+* **Multi-Objective Optimization (Composite Scoring)**: Guides the tuning agent using a weighted composite score of **Accuracy (70%)**, **Inference Latency (20%)**, and **Token/Cost Consumption (10%)** to find hyperparameter sweet spots.
+* **Interactive Experiment Dashboard**: An MLflow-style dashboard that supports:
+  - Real-time chart visualization of accuracy and composite score progressions.
+  - A dense **Experiment History Table** listing parameters and metrics of all iterations.
+  - **Side-by-Side Run Comparisons** that highlight parameter and score differences between any two selected runs.
+* **Heuristic Grounding Guardrails**: A number-grounding verifier that validates numbers, percentages, and financial figures in LLM responses against context sources, alerting users of potential calculations errors and penalizing hallucinations in the optimizer loop.
 * **Held-out Evaluation Set**: Evaluates against a deterministic 70/30 split (tuning/holdout sets) to prove true generalization and prevent overfitting.
 * **Failure-Aware Prompt Optimization**: Feeds evaluation failures directly back to the optimizer, allowing the agent to target its hypotheses to fix specific failing queries.
-* **Automated Parameter Syncing**: Seamlessly writes accepted configuration changes back to the production application config on the fly.
-* **Citation Grounding**: Target application chunks documents paragraph-by-paragraph and returns inline source document and section citations.
-* **Exportable Reports**: Generates self-contained Markdown reports of the optimization run with statistics, parameters, and progression charts.
+* **Dockerized Microservices**: Orchestrated with `docker-compose` to run the FastAPI backend, Streamlit client, and shared volume synchronization configs out of the box.
 
 ---
 
