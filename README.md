@@ -4,6 +4,10 @@
 >
 > To demonstrate its efficacy in a real-world scenario, this repository contains **RAG-Finance**, a production-style question-answering system over Indian tax slabs, GST council circulars, RBI monetary policy reports, and the Union Budget 2024.
 
+<p align="center">
+  <img src="dashboard/assets/dashboard_preview.png" alt="AutoTune React Dashboard Preview" width="100%" />
+</p>
+
 ---
 
 ## 📊 Before vs. After Optimization Results
