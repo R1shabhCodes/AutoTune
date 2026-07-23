@@ -25,7 +25,6 @@ engine/.env
 
 # Node.js (React dashboard)
 dashboard/node_modules/
-dashboard/dist/
 .eslintcache
 
 # OS Files
