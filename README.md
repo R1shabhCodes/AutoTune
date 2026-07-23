@@ -1,5 +1,12 @@
 # 🚀 AutoTune: A Self-Improving Hyperparameter Optimizer for RAG Pipelines
 
+[![Live AutoTune Dashboard](https://img.shields.io/badge/Live_Dashboard-AutoTune-6366f1?style=for-the-badge&logo=render)](https://autotune-dashboard.onrender.com)
+[![Live RAG Chatbot](https://img.shields.io/badge/Live_Chatbot-RAG_Finance-FF4B4B?style=for-the-badge&logo=streamlit)](https://rag-finance-dashboard.streamlit.app/)
+
+> 🌐 **Live Demos**:
+> * **AutoTune React Dashboard**: [autotune-dashboard.onrender.com](https://autotune-dashboard.onrender.com)
+> * **RAG Finance Chatbot**: [rag-finance-dashboard.streamlit.app](https://rag-finance-dashboard.streamlit.app/)
+
 > **AutoTune** is an automated optimization loop that autonomously tunes a RAG pipeline's hyperparameters by formulating hypotheses, executing experiment runs against a benchmark evaluation set, and persistently keeping only the changes that mathematically improve the accuracy score. 
 >
 > To demonstrate its efficacy in a real-world scenario, this repository contains **RAG-Finance**, a production-style question-answering system over Indian tax slabs, GST council circulars, RBI monetary policy reports, and the Union Budget 2024.
