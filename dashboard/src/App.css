@@ -27,8 +27,7 @@ body {
     radial-gradient(at 100% 100%, rgba(6, 182, 212, 0.1) 0px, transparent 50%);
   color: var(--text-primary);
   font-family: var(--font-sans);
-  height: 100vh;
-  overflow: hidden;
+  min-height: 100vh;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -946,12 +945,14 @@ body {
 }
 
 .app-root.mode-landing {
+  min-height: 100vh;
   overflow-y: auto;
   overflow-x: hidden;
 }
 
 .app-root.mode-dashboard {
   height: 100vh;
+  max-height: 100vh;
   overflow: hidden;
 }
 
