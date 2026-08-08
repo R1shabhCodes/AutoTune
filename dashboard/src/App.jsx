@@ -1,8 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Play, Activity, Settings, CheckCircle2, XCircle, Info, RefreshCw, Download } from 'lucide-react';
+import Navbar from './components/Navbar';
+import LandingPage from './components/LandingPage';
 
 export default function App() {
+  const [activeTab, setActiveTab] = useState('home'); // 'home' or 'dashboard'
   const [iterations, setIterations] = useState([]);
   const [status, setStatus] = useState('idle');
   const [bestConfig, setBestConfig] = useState(null);
@@ -259,27 +262,15 @@ export default function App() {
   };
 
   return (
-    <div className="app-container">
-      {/* Header */}
-      <header className="header">
-        <div className="header-title-section">
-          <span className="logo-icon">🎯</span>
-          <div>
-            <h1>AutoTune RAG</h1>
-            <p>Self-improving retrieval-augmented generation pipeline optimizer</p>
-          </div>
-        </div>
-        
-        {/* Run Controls */}
-        <div className="status-container">
-          <span className="provider-badge">Dual-Model (Gemini/Ollama)</span>
-          <div className={`status-dot ${status}`}></div>
-          <span className={`status-text ${status}`}>{status}</span>
-        </div>
-      </header>
+    <div className={`app-root ${activeTab === 'home' ? 'mode-landing' : 'mode-dashboard'}`}>
+      <Navbar activeTab={activeTab} setActiveTab={setActiveTab} status={status} />
 
-      {/* Top Cards Grid */}
-      <div className="top-grid">
+      {activeTab === 'home' ? (
+        <LandingPage setActiveTab={setActiveTab} />
+      ) : (
+        <div className="app-container">
+          {/* Top Cards Grid */}
+          <div className="top-grid">
         {/* Controls Card */}
         <div className="glass-card controls-section">
           <h2 className="section-title"><Settings size={16} /> Controller</h2>
@@ -790,6 +781,8 @@ export default function App() {
               </div>
             </div>
           </div>
+        </div>
+      )}
         </div>
       )}
     </div>
