@@ -43,6 +43,8 @@ def evaluate_dataset(config: Dict[str, Any], filename: str, is_experimental: boo
     total_retrieval_ms = 0.0
     total_generation_ms = 0.0
     total_tokens = 0
+    error_count = 0
+    last_error_info = None
 
     retrieval_strategy = config.get("retrieval_strategy", "vector")
 
@@ -78,16 +80,21 @@ def evaluate_dataset(config: Dict[str, Any], filename: str, is_experimental: boo
         t_ret_end = time.time()
         retrieval_ms = (t_ret_end - t_ret_start) * 1000
 
-        # 2. Generate response with timing
+        # 2. Generate response with timing and error detection
         t_gen_start = time.time()
-        generated_answer = rag_pipeline.generate(
+        generated_answer, gen_is_error, gen_err_info = rag_pipeline.generate(
             query=question,
             chunks=chunks,
             prompt_template=config.get("prompt_template", "Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"),
-            temperature=float(config.get("temperature", 0.0))
+            temperature=float(config.get("temperature", 0.0)),
+            return_metadata=True
         )
         t_gen_end = time.time()
         generation_ms = (t_gen_end - t_gen_start) * 1000
+
+        if gen_is_error:
+            error_count += 1
+            last_error_info = gen_err_info
 
         question_latency_ms = retrieval_ms + generation_ms
 
@@ -105,11 +112,13 @@ def evaluate_dataset(config: Dict[str, Any], filename: str, is_experimental: boo
         matched_count = 0
         answer_lower = generated_answer.lower()
 
-        for term in expected_list:
-            if term.lower() in answer_lower:
-                matched_count += 1
+        # If generation failed due to infrastructure error, do not count as valid text
+        if not gen_is_error:
+            for term in expected_list:
+                if term.lower() in answer_lower:
+                    matched_count += 1
 
-        question_score = (matched_count / len(expected_list)) if expected_list else 0.0
+        question_score = (matched_count / len(expected_list)) if expected_list and not gen_is_error else 0.0
         total_score += question_score
 
         citation_present = "[source:" in answer_lower or "[source" in answer_lower
@@ -124,7 +133,9 @@ def evaluate_dataset(config: Dict[str, Any], filename: str, is_experimental: boo
             "generated_answer": generated_answer,
             "actual_answer": generated_answer,
             "score": round(question_score, 4),
-            "passed": bool(question_score >= 1.0),
+            "passed": bool(question_score >= 1.0 and not gen_is_error),
+            "is_error": gen_is_error,
+            "error_info": gen_err_info,
             "citation_present": citation_present,
             "latency_ms": round(question_latency_ms, 1),
             "retrieval_ms": round(retrieval_ms, 1),
@@ -142,6 +153,7 @@ def evaluate_dataset(config: Dict[str, Any], filename: str, is_experimental: boo
 
     grounding_passed_count = sum(1 for r in results if r["grounding_passed"])
     grounding_rate = round(grounding_passed_count / num_questions, 4)
+    is_infrastructure_error = bool(error_count == len(eval_set) and len(eval_set) > 0)
 
     return {
         "aggregate_score": aggregate_score,
@@ -150,6 +162,9 @@ def evaluate_dataset(config: Dict[str, Any], filename: str, is_experimental: boo
         "avg_generation_ms": avg_generation_ms,
         "total_tokens": total_tokens,
         "grounding_rate": grounding_rate,
+        "error_count": error_count,
+        "is_infrastructure_error": is_infrastructure_error,
+        "infrastructure_error_info": last_error_info,
         "results": results
     }
 

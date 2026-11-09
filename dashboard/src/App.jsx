@@ -523,11 +523,21 @@ export default function App() {
                           </td>
                           <td>#{item.iteration_number}</td>
                           <td style={{ fontFamily: 'monospace', color: 'var(--accent-cyan)' }}>
-                            {item.param !== 'None' ? item.param : <span style={{ color: 'var(--text-secondary)' }}>Baseline</span>}
+                            {item.param === '[Baseline]' || item.param === 'None' || item.proposal_status === 'baseline' || item.proposal_status === 'infrastructure_error' ? (
+                              <span style={{ color: 'var(--text-secondary)' }}>Baseline Setup</span>
+                            ) : item.param === '[Unavailable]' || item.proposal_status === 'failed_proposal' ? (
+                              <span style={{ color: 'var(--status-red)' }}>Proposal Unavailable</span>
+                            ) : item.proposal_status === 'invalid_proposal' ? (
+                              <span style={{ color: '#f59e0b' }}>Rejected Proposal ({item.param})</span>
+                            ) : (
+                              item.param
+                            )}
                           </td>
                           <td>
-                            {item.iteration_number === 0 ? (
+                            {item.param === '[Baseline]' || item.param === 'None' || item.iteration_number === 0 || item.proposal_status === 'baseline' ? (
                               scores.newAcc.toFixed(4)
+                            ) : item.param === '[Unavailable]' || item.proposal_status === 'failed_proposal' ? (
+                              `${scores.newAcc.toFixed(3)} (N/A)`
                             ) : (
                               `${scores.oldAcc.toFixed(3)} → ${scores.newAcc.toFixed(3)}`
                             )}
@@ -576,10 +586,14 @@ export default function App() {
                 let oldAcc = item.old_score;
                 let oldComp = item.old_score; // fallback
                 
-                if (item.iteration_number > 0) {
-                  // Find the previous accepted iteration to show real progress
+                const isBaseline = item.param === '[Baseline]' || item.param === 'None' || item.iteration_number === 0 || item.proposal_status === 'baseline' || item.proposal_status === 'infrastructure_error';
+                const isFailedProposal = item.proposal_status === 'failed_proposal' || item.param === '[Unavailable]';
+                const isInvalidProposal = item.proposal_status === 'invalid_proposal';
+
+                if (!isBaseline && item.iteration_number > 0) {
+                  // Find the previous accepted iteration within the same experiment to show real progress
                   const prevAccepted = iterations.find(
-                    (it) => it.iteration_number < item.iteration_number && it.accepted
+                    (it) => it.iteration_number < item.iteration_number && it.accepted && (!item.experiment_id || it.experiment_id === item.experiment_id)
                   );
                   if (prevAccepted) {
                     oldAcc = prevAccepted.new_score;
@@ -598,7 +612,7 @@ export default function App() {
                       <span className="feed-item-title">
                         Iteration #{item.iteration_number}
                         <span className={`badge ${item.accepted ? 'accepted' : 'rejected'}`}>
-                          {item.accepted ? 'Accepted' : 'Rejected'}
+                          {isBaseline ? 'Baseline' : item.accepted ? 'Accepted' : 'Rejected'}
                         </span>
                         {typeof item.avg_latency_ms === 'number' && item.avg_latency_ms > 0 && (
                           <span className="feed-header-badge latency-badge">
@@ -614,13 +628,13 @@ export default function App() {
                       <span className="feed-timestamp">{item.timestamp}</span>
                     </div>
 
-                    {item.hypothesis && item.iteration_number > 0 && (
+                    {item.hypothesis && !isBaseline && (
                       <p className="feed-hypothesis">
                         &ldquo;{item.hypothesis}&rdquo;
                       </p>
                     )}
 
-                    {item.motivated_by && item.iteration_number > 0 && (
+                    {item.motivated_by && !isBaseline && (
                       <div className="feed-motivated-by" style={{ margin: '0.2rem 0 0.5rem 0', fontSize: '0.72rem', color: '#38bdf8', background: 'rgba(56, 189, 248, 0.05)', border: '1px solid rgba(56, 189, 248, 0.15)', padding: '0.15rem 0.4rem', borderRadius: '4px', display: 'inline-block', lineHeight: '1.2' }}>
                         <span style={{ fontWeight: 600 }}>Targeting:</span> {item.motivated_by.split(' | ').join(', ')}
                       </div>
@@ -628,8 +642,18 @@ export default function App() {
 
                     <div className="feed-change-grid">
                       <div className="param-diff">
-                        {item.iteration_number === 0 ? (
-                          <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Baseline Setup</span>
+                        {isBaseline ? (
+                          <span style={{ fontSize: '0.85rem', color: 'var(--accent-cyan)', fontWeight: 600 }}>
+                            {item.proposal_status === 'infrastructure_error' ? 'Baseline Failed (Provider Offline)' : 'Baseline Setup'}
+                          </span>
+                        ) : isFailedProposal ? (
+                          <span style={{ fontSize: '0.85rem', color: 'var(--status-red)', fontWeight: 600 }}>
+                            Proposal Unavailable
+                          </span>
+                        ) : isInvalidProposal ? (
+                          <span style={{ fontSize: '0.85rem', color: '#f59e0b', fontWeight: 600 }}>
+                            Validation Rejected ({item.param})
+                          </span>
                         ) : (
                           <>
                             <span className="param-name">{item.param}</span>:
@@ -641,9 +665,9 @@ export default function App() {
                       </div>
                       
                       <div className="scores-diff-container">
-                        <div className={`score-progress ${item.accepted ? 'improved' : ''}`}>
+                        <div className={`score-progress ${item.accepted && !isBaseline ? 'improved' : ''}`}>
                           <span className="score-diff-label">Acc:</span>
-                          {item.iteration_number === 0 ? (
+                          {isBaseline || isFailedProposal ? (
                             <span>{newAcc.toFixed(4)}</span>
                           ) : (
                             <>
@@ -653,9 +677,9 @@ export default function App() {
                             </>
                           )}
                         </div>
-                        <div className={`score-progress ${item.accepted ? 'improved' : ''}`}>
+                        <div className={`score-progress ${item.accepted && !isBaseline ? 'improved' : ''}`}>
                           <span className="score-diff-label">Comp:</span>
-                          {item.iteration_number === 0 ? (
+                          {isBaseline || isFailedProposal ? (
                             <span>{newComp.toFixed(4)}</span>
                           ) : (
                             <>
@@ -667,6 +691,12 @@ export default function App() {
                         </div>
                       </div>
                     </div>
+
+                    {item.rejection_reason && (
+                      <div style={{ fontSize: '0.72rem', color: '#f87171', marginTop: '0.35rem', fontStyle: 'italic', wordBreak: 'break-word' }}>
+                        Reason: {item.rejection_reason}
+                      </div>
+                    )}
                   </div>
                 );
               })

@@ -392,6 +392,79 @@ class TestPhase1Engine(unittest.TestCase):
         self.assertNotEqual(key1, key3, "Different chunk parameters must have different cache keys")
         self.assertTrue(key1.startswith("idx_"))
 
+    def test_llm_structured_error_metadata(self):
+        """11. LLM failure returns structured metadata with provider and category."""
+        # Point to an unreachable port to test error classification
+        old_ollama = os.environ.get("OLLAMA_URL")
+        os.environ["OLLAMA_URL"] = "http://127.0.0.1:59999"
+        old_gemini = os.environ.get("GEMINI_API_KEY")
+        if "GEMINI_API_KEY" in os.environ:
+            del os.environ["GEMINI_API_KEY"]
+
+        try:
+            text, is_err, err_info = rag_pipeline.call_llm("test", 0.0, return_metadata=True)
+            self.assertTrue(is_err)
+            self.assertIsNotNone(err_info)
+            self.assertEqual(err_info["provider"], "ollama")
+            self.assertEqual(err_info["category"], "connection_refused")
+            self.assertIn("Cannot connect to Ollama", err_info["message"])
+        finally:
+            if old_ollama:
+                os.environ["OLLAMA_URL"] = old_ollama
+            else:
+                os.environ.pop("OLLAMA_URL", None)
+            if old_gemini:
+                os.environ["GEMINI_API_KEY"] = old_gemini
+
+    def test_baseline_and_proposal_status_representation(self):
+        """12. Distinct representation of Baseline vs Proposal Unavailable vs Parameter Changes."""
+        exp_id = "exp_test_status_repr"
+
+        # Baseline trial
+        agent_loop.log_iteration(
+            iter_num=800,
+            hypothesis="Baseline evaluation of initial configuration.",
+            param="[Baseline]",
+            old_val="N/A",
+            new_val="N/A",
+            old_score=0.0,
+            new_score=0.70,
+            accepted=True,
+            composite_score=0.72,
+            experiment_id=exp_id,
+            config_snapshot=self.valid_base_config,
+            proposal_status="baseline",
+            db_path=self.test_db_path
+        )
+
+        # Unavailable proposal trial
+        agent_loop.log_iteration(
+            iter_num=801,
+            hypothesis="Proposal generation failed.",
+            param="[Unavailable]",
+            old_val="N/A",
+            new_val="N/A",
+            old_score=0.70,
+            new_score=0.70,
+            accepted=False,
+            composite_score=0.72,
+            experiment_id=exp_id,
+            config_snapshot=self.valid_base_config,
+            rejection_reason="Proposal Unavailable [ollama:connection_refused]",
+            proposal_status="failed_proposal",
+            db_path=self.test_db_path
+        )
+
+        trials = db.get_experiment_trials(experiment_id=exp_id, db_path=self.test_db_path)
+        base = [t for t in trials if t["iteration_number"] == 800][0]
+        failed = [t for t in trials if t["iteration_number"] == 801][0]
+
+        self.assertEqual(base["param"], "[Baseline]")
+        self.assertEqual(base["proposal_status"], "baseline")
+        self.assertEqual(failed["param"], "[Unavailable]")
+        self.assertEqual(failed["proposal_status"], "failed_proposal")
+        self.assertIn("connection_refused", failed["rejection_reason"])
+
 if __name__ == "__main__":
     unittest.main()
 
