@@ -176,6 +176,56 @@ def apply_migrations(db_path: str = DB_PATH):
             conn.commit()
             logger.info("Applied migration 1: initial_v2_schema_and_legacy_backfill")
 
+        # -------------------------------------------------------------
+        # Migration 2: Phase 2 Question-Level Evaluations Table
+        # -------------------------------------------------------------
+        if 2 not in applied:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS question_evaluations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    trial_id TEXT NOT NULL,
+                    experiment_id TEXT NOT NULL,
+                    iteration_number INTEGER,
+                    sample_id TEXT,
+                    question TEXT NOT NULL,
+                    expected_answer TEXT,
+                    generated_answer TEXT,
+                    retrieved_contexts TEXT,
+                    expected_term_pass_rate REAL,
+                    exact_match REAL,
+                    numerical_grounding_passed INTEGER,
+                    ungrounded_numbers TEXT,
+                    citation_present INTEGER,
+                    faithfulness REAL,
+                    answer_relevancy REAL,
+                    context_precision REAL,
+                    context_recall REAL,
+                    latency_ms REAL,
+                    retrieval_ms REAL,
+                    generation_ms REAL,
+                    tokens INTEGER,
+                    cost REAL,
+                    is_error INTEGER,
+                    failure_category TEXT,
+                    error_info TEXT,
+                    evaluation_metadata TEXT,
+                    created_at TEXT NOT NULL
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_question_evaluations_trial 
+                ON question_evaluations(trial_id)
+            """)
+
+            cursor.execute("""
+                INSERT INTO schema_migrations (version, name, applied_at)
+                VALUES (2, 'phase2_question_evaluations_table', ?)
+            """, (datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),))
+
+            conn.commit()
+            logger.info("Applied migration 2: phase2_question_evaluations_table")
+
     except Exception as e:
         conn.rollback()
         logger.error(f"Failed to apply database migrations: {e}")
@@ -322,4 +372,102 @@ def get_experiment_trials(experiment_id: str = None, limit: int = None, db_path:
         return [dict(r) for r in rows]
     finally:
         conn.close()
+
+
+def save_question_evaluations(
+    trial_id: str,
+    experiment_id: str,
+    iteration_number: int,
+    question_results: list,
+    db_path: str = DB_PATH
+):
+    """
+    Persists question-level granular evaluation telemetry to the database.
+    """
+    if not question_results:
+        return
+
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    try:
+        with conn:
+            for qr in question_results:
+                is_dict = isinstance(qr, dict)
+                sample_id = qr.get("sample_id", "") if is_dict else getattr(qr, "sample_id", "")
+                question = qr.get("question", "") if is_dict else getattr(qr, "question", "")
+                exp_ans = qr.get("expected_answer", "") if is_dict else getattr(qr, "expected_answer", "")
+                gen_ans = qr.get("generated_answer", "") if is_dict else getattr(qr, "generated_answer", "")
+                contexts = qr.get("retrieved_contexts", []) if is_dict else getattr(qr, "retrieved_contexts", [])
+                contexts_json = json.dumps(contexts) if contexts else "[]"
+                
+                term_rate = qr.get("expected_term_pass_rate", qr.get("score", None)) if is_dict else getattr(qr, "expected_term_pass_rate", None)
+                exact = qr.get("exact_match", None) if is_dict else getattr(qr, "exact_match", None)
+                num_ground = qr.get("grounding_passed", qr.get("numerical_grounding_passed", None)) if is_dict else getattr(qr, "numerical_grounding_passed", None)
+                ungrounded = qr.get("ungrounded_numbers", []) if is_dict else getattr(qr, "ungrounded_numbers", [])
+                ungrounded_json = json.dumps(ungrounded) if ungrounded else "[]"
+                
+                citation_val = qr.get("citation_present", False) if is_dict else getattr(qr, "citation_present", False)
+                citation = 1 if citation_val else 0
+                
+                faithfulness = qr.get("faithfulness", None) if is_dict else getattr(qr, "faithfulness", None)
+                relevancy = qr.get("answer_relevancy", None) if is_dict else getattr(qr, "answer_relevancy", None)
+                cp = qr.get("context_precision", None) if is_dict else getattr(qr, "context_precision", None)
+                cr = qr.get("context_recall", None) if is_dict else getattr(qr, "context_recall", None)
+                
+                lat = float(qr.get("latency_ms", 0.0) if is_dict else getattr(qr, "latency_ms", 0.0) or 0.0)
+                ret_ms = float(qr.get("retrieval_ms", 0.0) if is_dict else getattr(qr, "retrieval_ms", 0.0) or 0.0)
+                gen_ms = float(qr.get("generation_ms", 0.0) if is_dict else getattr(qr, "generation_ms", 0.0) or 0.0)
+                tok = int(qr.get("tokens", 0) if is_dict else getattr(qr, "tokens", 0) or 0)
+                cost = float(qr.get("cost", 0.0) if is_dict else getattr(qr, "cost", 0.0) or 0.0)
+                
+                is_err_val = qr.get("is_error", False) if is_dict else getattr(qr, "is_error", False)
+                is_err = 1 if is_err_val else 0
+                
+                failure_cat = qr.get("failure_category", None) if is_dict else getattr(qr, "failure_category", None)
+                err_info = qr.get("error_info", None) if is_dict else getattr(qr, "error_info", None)
+                err_info_json = json.dumps(err_info) if err_info else None
+                meta = qr.get("evaluation_metadata", None) if is_dict else getattr(qr, "evaluation_metadata", None)
+                meta_json = json.dumps(meta) if meta else None
+
+                cursor.execute("""
+                    INSERT INTO question_evaluations (
+                        trial_id, experiment_id, iteration_number, sample_id, question,
+                        expected_answer, generated_answer, retrieved_contexts,
+                        expected_term_pass_rate, exact_match, numerical_grounding_passed,
+                        ungrounded_numbers, citation_present, faithfulness, answer_relevancy,
+                        context_precision, context_recall, latency_ms, retrieval_ms,
+                        generation_ms, tokens, cost, is_error, failure_category,
+                        error_info, evaluation_metadata, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    trial_id, experiment_id, iteration_number, sample_id, question,
+                    exp_ans, gen_ans, contexts_json,
+                    term_rate, exact, 1 if num_ground else 0,
+                    ungrounded_json, citation, faithfulness, relevancy,
+                    cp, cr, lat, ret_ms,
+                    gen_ms, tok, cost, is_err, failure_cat,
+                    err_info_json, meta_json, now_str
+                ))
+    finally:
+        conn.close()
+
+
+def get_question_evaluations_for_trial(trial_id: str, db_path: str = DB_PATH) -> list:
+    """
+    Retrieves all question-level evaluation records for a specific trial.
+    """
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT * FROM question_evaluations 
+            WHERE trial_id = ? 
+            ORDER BY id ASC
+        """, (trial_id,))
+        return [dict(r) for r in cursor.fetchall()]
+    finally:
+        conn.close()
+
 

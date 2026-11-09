@@ -386,6 +386,16 @@ async def run_optimization(
             db_path=db_path
         )
 
+        # Save granular question evaluations for baseline
+        if baseline_eval.get("results"):
+            db.save_question_evaluations(
+                trial_id=f"trial_{experiment_id}_0",
+                experiment_id=experiment_id,
+                iteration_number=baseline_iter_num,
+                question_results=baseline_eval["results"],
+                db_path=db_path
+            )
+
         best_accepted_config = active_config.copy()
         best_accepted_score = baseline_score
         best_accepted_composite = baseline_composite
@@ -647,6 +657,16 @@ async def run_optimization(
             proposal_status="success",
             db_path=db_path
         )
+
+        # Save granular question evaluations to SQLite
+        if eval_res.get("results"):
+            db.save_question_evaluations(
+                trial_id=f"trial_{experiment_id}_{i}",
+                experiment_id=experiment_id,
+                iteration_number=i,
+                question_results=eval_res["results"],
+                db_path=db_path
+            )
 
         # 9. Notify via callback / WebSocket
         if on_iteration_callback:

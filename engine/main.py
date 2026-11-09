@@ -134,6 +134,13 @@ def get_iterations_endpoint(experiment_id: Optional[str] = Query(None)):
         
     return db.get_experiment_trials(experiment_id=experiment_id)
 
+@app.get("/trials/{trial_id}/evaluations")
+def get_trial_evaluations_endpoint(trial_id: str):
+    """Returns question-level granular evaluation telemetry for a trial."""
+    if not os.path.exists(DB_PATH):
+        return []
+    return db.get_question_evaluations_for_trial(trial_id)
+
 @app.get("/best")
 def get_best_config_endpoint(experiment_id: Optional[str] = Query(None)):
     """Returns the current best configuration and its evaluation score/metrics."""
