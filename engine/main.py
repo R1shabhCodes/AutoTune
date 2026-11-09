@@ -1,6 +1,6 @@
 # main.py
 # FastAPI application backend that serves the API, WebSocket stream, and dashboard static files.
-# This file is fixed and is NOT modified by the optimization agent.
+# Preserves all existing endpoints while supporting AutoTune 2.0 experiment state.
 
 import sys
 import os
@@ -8,17 +8,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import sqlite3
 import asyncio
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks
+from typing import Optional, List
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import agent_loop
 import config
+import db
 
 # Run database setup and migrations on boot
-agent_loop.init_db()
+db.apply_migrations()
 
-app = FastAPI(title="AutoTune RAG Optimizer", description="Dashboard & API for the self-improving RAG pipeline")
+app = FastAPI(title="AutoTune RAG Optimizer", description="Universal RAG Evaluation, Observability and Optimization Platform")
 
 # Enable CORS for React local development (typically on port 5173)
 app.add_middleware(
@@ -36,6 +38,8 @@ DB_PATH = os.path.join(engine_dir, "autotune.db")
 
 class RunPayload(BaseModel):
     iterations: int = 15
+    experiment_id: Optional[str] = None
+    project_id: str = "default"
 
 # WebSocket Connection Manager
 class ConnectionManager:
@@ -69,24 +73,27 @@ async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
         while True:
-            # Keep the socket open and listen for heartbeat/messages
+            # Keep socket open and listen for heartbeat
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
-async def run_optimization_wrapper(iterations: int):
-    """Wrapper to execute the optimization loop in the background and update status."""
+async def run_optimization_wrapper(iterations: int, experiment_id: Optional[str] = None, project_id: str = "default"):
+    """Wrapper to execute the optimization loop in the background and stream updates."""
     global is_running
     try:
         async def ws_callback(data: dict):
-            # Send iteration result via websocket
             await manager.broadcast({
                 "type": "iteration",
                 "data": data
             })
             
-        # Run optimization
-        await agent_loop.run_optimization(iterations, on_iteration_callback=ws_callback)
+        await agent_loop.run_optimization(
+            num_iterations=iterations,
+            on_iteration_callback=ws_callback,
+            experiment_id=experiment_id,
+            project_id=project_id
+        )
     except Exception as e:
         print(f"Error in background optimization task: {e}")
     finally:
@@ -104,68 +111,53 @@ async def run_optimization_endpoint(payload: RunPayload, background_tasks: Backg
         return {"status": "error", "message": "An optimization run is already in progress."}
         
     is_running = True
-    background_tasks.add_task(run_optimization_wrapper, payload.iterations)
+    background_tasks.add_task(
+        run_optimization_wrapper,
+        payload.iterations,
+        payload.experiment_id,
+        payload.project_id
+    )
     
-    # Broadcast status change to running
     await manager.broadcast({"type": "status", "data": "running"})
     
-    return {"status": "started", "message": f"Started optimization run of {payload.iterations} iterations."}
+    return {
+        "status": "started",
+        "message": f"Started optimization run of {payload.iterations} iterations.",
+        "experiment_id": payload.experiment_id
+    }
 
 @app.get("/iterations")
-def get_iterations_endpoint():
+def get_iterations_endpoint(experiment_id: Optional[str] = Query(None)):
     """Returns the full log of optimization iterations from the database."""
     if not os.path.exists(DB_PATH):
         return []
         
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT iteration_number, hypothesis, param, old_value, new_value, old_score, new_score, accepted, timestamp, motivated_by, avg_latency_ms, total_tokens, composite_score
-        FROM iterations
-        ORDER BY iteration_number DESC
-    """)
-    rows = cursor.fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    return db.get_experiment_trials(experiment_id=experiment_id)
 
 @app.get("/best")
-def get_best_config_endpoint():
+def get_best_config_endpoint(experiment_id: Optional[str] = Query(None)):
     """Returns the current best configuration and its evaluation score/metrics."""
-    # Ensure config is loaded fresh from file
     import importlib
     importlib.reload(config)
     
-    best_score = 0.0
-    best_composite = 0.0
-    best_latency = 0.0
-    best_tokens = 0
+    best_trial = db.get_experiment_best(experiment_id=experiment_id)
     
-    if os.path.exists(DB_PATH):
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        # Find the latest accepted iteration to get its metrics
-        cursor.execute("""
-            SELECT new_score, composite_score, avg_latency_ms, total_tokens 
-            FROM iterations 
-            WHERE accepted = 1 
-            ORDER BY iteration_number DESC 
-            LIMIT 1
-        """)
-        row = cursor.fetchone()
-        if row:
-            best_score = row["new_score"]
-            best_composite = row["composite_score"] if row["composite_score"] is not None else row["new_score"]
-            best_latency = row["avg_latency_ms"] if row["avg_latency_ms"] is not None else 0.0
-            best_tokens = row["total_tokens"] if row["total_tokens"] is not None else 0
-        conn.close()
-        
+    if best_trial:
+        return {
+            "score": best_trial["new_score"],
+            "composite_score": best_trial["composite_score"] if best_trial["composite_score"] is not None else best_trial["new_score"],
+            "avg_latency_ms": best_trial["avg_latency_ms"] if best_trial["avg_latency_ms"] is not None else 0.0,
+            "total_tokens": best_trial["total_tokens"] if best_trial["total_tokens"] is not None else 0,
+            "config": config.CONFIG,
+            "experiment_id": best_trial.get("experiment_id"),
+            "iteration_number": best_trial.get("iteration_number")
+        }
+
     return {
-        "score": best_score,
-        "composite_score": best_composite,
-        "avg_latency_ms": best_latency,
-        "total_tokens": best_tokens,
+        "score": 0.0,
+        "composite_score": 0.0,
+        "avg_latency_ms": 0.0,
+        "total_tokens": 0,
         "config": config.CONFIG
     }
 
