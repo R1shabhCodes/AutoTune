@@ -156,24 +156,20 @@ CONFIG = {repr(new_config)}
         except Exception as e:
             print(f"Failed to sync config to target app: {e}")
 
-def call_llm_json(prompt: str, system_prompt: str) -> dict:
+def call_llm_json(prompt: str, system_prompt: str, model_override: Optional[str] = None) -> tuple:
     """
-    Calls the LLM (Gemini or Ollama) requesting JSON output,
-    and returns the parsed Python dictionary.
+    Calls the LLM (Gemini or Ollama) requesting JSON output.
+    Defaults to qwen2.5:1.5b via Ollama, or Gemini API if GEMINI_API_KEY is present.
+    Supports model_override to test alternative models (e.g. glm-5.2:cloud).
+    Returns: (parsed_dict_or_None, error_info_dict_or_None)
     """
-    gemini_key = os.environ.get("GEMINI_API_KEY")
-    env_path = os.path.join(engine_dir, ".env")
-    if not gemini_key and os.path.exists(env_path):
-        with open(env_path) as f:
-            for line in f:
-                if "=" in line and not line.strip().startswith("#"):
-                    k, v = line.strip().split("=", 1)
-                    if k.strip() == "GEMINI_API_KEY":
-                        gemini_key = v.strip().strip('"').strip("'")
-                        break
+    import models as model_provider
+
+    gemini_key = model_provider.get_env_variable("GEMINI_API_KEY")
 
     if gemini_key:
-        model = "gemini-2.5-flash"
+        provider = "gemini"
+        model = model_override or "gemini-2.5-flash"
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_key}"
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
@@ -193,14 +189,26 @@ def call_llm_json(prompt: str, system_prompt: str) -> dict:
             with urllib.request.urlopen(req, timeout=30) as res:
                 resp = json.loads(res.read().decode("utf-8"))
                 text = resp["candidates"][0]["content"]["parts"][0]["text"]
-                return json.loads(text)
+                return json.loads(text), None
         except Exception as e:
-            print(f"Gemini proposal generation error: {e}")
-            raise e
+            cat = "auth_error" if "401" in str(e) or "403" in str(e) else "api_error"
+            err_info = {
+                "provider": provider,
+                "model": model,
+                "category": cat,
+                "exception_type": type(e).__name__,
+                "message": str(e)
+            }
+            print(f"Gemini proposal generation error [{cat}]: {e}")
+            return None, err_info
     else:
-        url = "http://localhost:11434/api/generate"
+        provider = "ollama"
+        ollama_url = model_provider.get_ollama_base_url()
+        url = f"{ollama_url}/api/generate"
+        model = model_override or model_provider.get_optimizer_model()
+
         payload = {
-            "model": "qwen2.5:1.5b",
+            "model": model,
             "prompt": f"System Instruction: {system_prompt}\n\nUser Prompt: {prompt}",
             "stream": False,
             "format": "json",
@@ -218,15 +226,25 @@ def call_llm_json(prompt: str, system_prompt: str) -> dict:
             with urllib.request.urlopen(req, timeout=120) as res:
                 resp = json.loads(res.read().decode("utf-8"))
                 text = resp.get("response", "")
-                return json.loads(text)
+                return json.loads(text), None
         except Exception as e:
-            print(f"Ollama proposal generation error: {e}")
-            raise e
+            cat = "connection_refused" if "10061" in str(e) or "refused" in str(e).lower() else "timeout" if "timeout" in str(e).lower() else "runtime_error"
+            msg = f"Cannot connect to Ollama at {ollama_url}. Is Ollama running or should GEMINI_API_KEY be set?" if cat == "connection_refused" else str(e)
+            err_info = {
+                "provider": provider,
+                "model": model,
+                "category": cat,
+                "exception_type": type(e).__name__,
+                "message": msg
+            }
+            print(f"Ollama proposal generation error [{cat}]: {msg}")
+            return None, err_info
 
-def generate_proposal(current_config: dict, history: list, last_eval_results: list = None) -> Optional[dict]:
+def generate_proposal(current_config: dict, history: list, last_eval_results: list = None, model_override: Optional[str] = None) -> tuple:
     """
     Uses LLM to generate a single-parameter tuning proposal.
-    Returns None if generation fails after retries (never returns arbitrary top_k).
+    Returns: (proposal_dict_or_None, error_info_or_None)
+    Never returns arbitrary top_k fallback.
     """
     program_path = os.path.join(engine_dir, "program.md")
     with open(program_path, "r", encoding="utf-8") as f:
@@ -255,16 +273,19 @@ def generate_proposal(current_config: dict, history: list, last_eval_results: li
         
     prompt += "Propose one single parameter modification. Return valid JSON only, adhering to the required schema."
 
+    last_error_info = None
     for attempt in range(3):
         try:
-            proposal = call_llm_json(prompt, system_prompt)
+            proposal, err_info = call_llm_json(prompt, system_prompt, model_override=model_override)
             if isinstance(proposal, dict) and "param" in proposal and "new_value" in proposal:
-                return proposal
+                return proposal, None
+            if err_info:
+                last_error_info = err_info
         except Exception as e:
-            print(f"JSON proposal attempt {attempt+1} failed: {e}")
+            last_error_info = {"category": "unexpected", "message": str(e)}
 
     print("Warning: LLM failed to generate a valid proposal after 3 attempts.")
-    return None
+    return None, last_error_info
 
 async def run_optimization(
     num_iterations: int,
@@ -277,7 +298,17 @@ async def run_optimization(
     Main optimization loop coordinating hypothesis generation, isolated evaluation,
     strict baseline tracking, immutable snapshot logging, and real-time streaming.
     """
+    import models as model_provider
+
     init_db(db_path)
+
+    # Pre-flight provider health and model availability check
+    provider_status = model_provider.validate_provider_setup()
+    if provider_status.get("errors"):
+        err_text = "; ".join(provider_status["errors"])
+        raise RuntimeError(f"Provider health check failed before experiment startup: {err_text}")
+
+    print(f"Provider health check passed: Optimizer='{provider_status['optimizer_model']}' | Generator='{provider_status['generator_model']}'")
 
     # 1. Setup experiment ID
     if not experiment_id:
@@ -317,6 +348,9 @@ async def run_optimization(
         print(f"--- Running Baseline Evaluation (Iteration {baseline_iter_num}) for {experiment_id} ---")
         
         baseline_res = eval_harness.evaluate_config(active_config, is_experimental=False)
+        is_infra_err = baseline_res.get("is_infrastructure_error", False)
+        infra_info = baseline_res.get("infrastructure_error_info")
+
         baseline_score = baseline_res["aggregate_score"]
         baseline_latency = baseline_res.get("avg_latency_ms", 0.0)
         baseline_tokens = baseline_res.get("total_tokens", 0)
@@ -325,15 +359,19 @@ async def run_optimization(
         baseline_composite = compute_composite_score(baseline_score, baseline_latency, baseline_tokens, baseline_num_q, baseline_grounding)
         last_eval_results = baseline_res["results"]
 
+        baseline_status = "infrastructure_error" if is_infra_err else "baseline"
+        baseline_rejection = f"LLM Provider Offline [{infra_info['provider']}]: {infra_info['message']}" if is_infra_err and infra_info else ""
+        baseline_hyp = "Baseline evaluation failed: LLM provider unreachable." if is_infra_err else "Baseline evaluation of initial configuration."
+
         log_iteration(
             iter_num=baseline_iter_num,
-            hypothesis="Baseline evaluation of initial configuration.",
-            param="None",
-            old_val="None",
-            new_val="None",
+            hypothesis=baseline_hyp,
+            param="[Baseline]",
+            old_val="N/A",
+            new_val="N/A",
             old_score=0.0,
             new_score=baseline_score,
-            accepted=True,
+            accepted=not is_infra_err,
             motivated_by="",
             avg_latency_ms=baseline_latency,
             total_tokens=baseline_tokens,
@@ -343,8 +381,8 @@ async def run_optimization(
             trial_id=f"trial_{experiment_id}_0",
             config_snapshot=active_config,
             score_improvement=0.0,
-            rejection_reason="",
-            proposal_status="success",
+            rejection_reason=baseline_rejection,
+            proposal_status=baseline_status,
             db_path=db_path
         )
 
@@ -356,13 +394,13 @@ async def run_optimization(
         if on_iteration_callback:
             await on_iteration_callback({
                 "iteration_number": baseline_iter_num,
-                "hypothesis": "Baseline evaluation of initial configuration.",
-                "param": "None",
-                "old_value": "None",
-                "new_value": "None",
+                "hypothesis": baseline_hyp,
+                "param": "[Baseline]",
+                "old_value": "N/A",
+                "new_value": "N/A",
                 "old_score": 0.0,
                 "new_score": baseline_score,
-                "accepted": 1,
+                "accepted": 1 if not is_infra_err else 0,
                 "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "motivated_by": "",
                 "avg_latency_ms": baseline_latency,
@@ -371,7 +409,8 @@ async def run_optimization(
                 "project_id": project_id,
                 "experiment_id": experiment_id,
                 "score_improvement": 0.0,
-                "rejection_reason": ""
+                "rejection_reason": baseline_rejection,
+                "proposal_status": baseline_status
             })
     else:
         # Load best accepted candidate specifically for this experiment
@@ -414,18 +453,21 @@ async def run_optimization(
                 motivated_by_str = " | ".join([f["question"] for f in failing_qs[:3]])
 
         # 4. Generate proposal from the BEST ACCEPTED config (not a rejected config)
-        proposal = generate_proposal(best_accepted_config, history, last_eval_results)
+        proposal, prop_err = generate_proposal(best_accepted_config, history, last_eval_results)
         
         # Handle failed proposal explicitly
         if proposal is None:
-            rejection_msg = "LLM failed to generate a valid proposal after 3 attempts."
+            prov = prop_err.get("provider", "LLM") if prop_err else "LLM"
+            cat = prop_err.get("category", "error") if prop_err else "failure"
+            msg = prop_err.get("message", "LLM failed to generate a valid proposal after 3 attempts.") if prop_err else "LLM failed to generate a valid proposal after 3 attempts."
+            rejection_msg = f"Proposal Unavailable [{prov}:{cat}] - {msg}"
             print(f"Trial {i} FAILED: {rejection_msg}")
             log_iteration(
                 iter_num=i,
                 hypothesis="Proposal generation failed.",
-                param="None",
-                old_val="None",
-                new_val="None",
+                param="[Unavailable]",
+                old_val="N/A",
+                new_val="N/A",
                 old_score=best_accepted_score,
                 new_score=best_accepted_score,
                 accepted=False,
@@ -446,9 +488,9 @@ async def run_optimization(
                 await on_iteration_callback({
                     "iteration_number": i,
                     "hypothesis": "Proposal generation failed.",
-                    "param": "None",
-                    "old_value": "None",
-                    "new_value": "None",
+                    "param": "[Unavailable]",
+                    "old_value": "N/A",
+                    "new_value": "N/A",
                     "old_score": best_accepted_score,
                     "new_score": best_accepted_score,
                     "accepted": 0,
@@ -457,7 +499,8 @@ async def run_optimization(
                     "avg_latency_ms": 0.0,
                     "total_tokens": 0,
                     "composite_score": best_accepted_composite,
-                    "rejection_reason": rejection_msg
+                    "rejection_reason": rejection_msg,
+                    "proposal_status": "failed_proposal"
                 })
             continue
 

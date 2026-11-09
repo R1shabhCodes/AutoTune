@@ -344,25 +344,19 @@ def retrieve(query: str, top_k: int, strategy: str = "vector", collection_name: 
     else:
         return retrieve_vector(query, top_k, collection_name=collection_name)
 
-def call_llm(prompt: str, temperature: float, system_prompt: str = None) -> str:
+def call_llm(prompt: str, temperature: float, system_prompt: str = None, return_metadata: bool = False, model_override: Optional[str] = None):
     """
-    Routes the LLM request to the Gemini API (if key is present)
-    or falls back to the local Ollama instance.
+    Routes the LLM request to the configured generator model.
+    Defaults to llama3.2:latest via Ollama, or Gemini API if GEMINI_API_KEY is present.
+    Supports model_override to target alternative models (e.g. glm-5.2:cloud).
     """
-    gemini_key = os.environ.get("GEMINI_API_KEY")
-    engine_dir = os.path.dirname(os.path.abspath(__file__))
-    env_path = os.path.join(engine_dir, ".env")
-    if not gemini_key and os.path.exists(env_path):
-        with open(env_path) as f:
-            for line in f:
-                if "=" in line and not line.strip().startswith("#"):
-                    k, v = line.strip().split("=", 1)
-                    if k.strip() == "GEMINI_API_KEY":
-                        gemini_key = v.strip().strip('"').strip("'")
-                        break
+    import models as model_provider
+
+    gemini_key = model_provider.get_env_variable("GEMINI_API_KEY")
 
     if gemini_key:
-        model = "gemini-2.5-flash"
+        provider = "gemini"
+        model = model_override or "gemini-2.5-flash"
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_key}"
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
@@ -382,13 +376,28 @@ def call_llm(prompt: str, temperature: float, system_prompt: str = None) -> str:
         try:
             with urllib.request.urlopen(req, timeout=30) as res:
                 resp = json.loads(res.read().decode("utf-8"))
-                return resp["candidates"][0]["content"]["parts"][0]["text"]
+                text = resp["candidates"][0]["content"]["parts"][0]["text"]
+                if return_metadata:
+                    return text, False, None
+                return text
         except Exception as e:
-            return f"Error calling Gemini API: {str(e)}"
+            cat = "auth_error" if "401" in str(e) or "403" in str(e) else "api_error"
+            err_info = {
+                "provider": provider,
+                "model": model,
+                "category": cat,
+                "exception_type": type(e).__name__,
+                "message": str(e)
+            }
+            err_msg = f"Error calling Gemini API: {str(e)}"
+            if return_metadata:
+                return err_msg, True, err_info
+            return err_msg
     else:
-        ollama_url = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+        provider = "ollama"
+        ollama_url = model_provider.get_ollama_base_url()
         url = f"{ollama_url}/api/generate"
-        model = "qwen2.5:1.5b"
+        model = model_override or model_provider.get_generator_model()
 
         full_prompt = prompt
         if system_prompt:
@@ -412,15 +421,29 @@ def call_llm(prompt: str, temperature: float, system_prompt: str = None) -> str:
         try:
             with urllib.request.urlopen(req, timeout=120) as res:
                 resp = json.loads(res.read().decode("utf-8"))
-                return resp.get("response", "")
+                text = resp.get("response", "")
+                if return_metadata:
+                    return text, False, None
+                return text
         except Exception as e:
-            return f"Error calling local Ollama (is it running and does it have model 'qwen2.5:1.5b'?): {str(e)}"
+            cat = "connection_refused" if "10061" in str(e) or "refused" in str(e).lower() else "timeout" if "timeout" in str(e).lower() else "runtime_error"
+            err_info = {
+                "provider": provider,
+                "model": model,
+                "category": cat,
+                "exception_type": type(e).__name__,
+                "message": f"Cannot connect to Ollama at {ollama_url}: {str(e)}" if cat == "connection_refused" else str(e)
+            }
+            err_msg = f"Error calling local Ollama (is it running and does it have model '{model}'?): {str(e)}"
+            if return_metadata:
+                return err_msg, True, err_info
+            return err_msg
 
-def generate(query: str, chunks: list, prompt_template: str, temperature: float, history: list = None) -> str:
-    """Formats the prompt with retrieved chunks (context) and calls the active LLM."""
+def generate(query: str, chunks: list, prompt_template: str, temperature: float, history: list = None, return_metadata: bool = False, model_override: Optional[str] = None):
+    """Formats the prompt with retrieved chunks (context) and calls the active generator LLM (default: llama3.2:latest)."""
     context = "\n\n".join(chunks) if chunks else "No context retrieved."
     prompt = prompt_template.replace("{context}", context).replace("{question}", query)
-    return call_llm(prompt, temperature)
+    return call_llm(prompt, temperature, return_metadata=return_metadata, model_override=model_override)
 
 def verify_grounding(answer: str, context_chunks: list, question: str) -> tuple[bool, list]:
     """
