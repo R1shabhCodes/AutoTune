@@ -387,12 +387,12 @@ async def run_optimization(
         )
 
         # Save granular question evaluations for baseline
-        if baseline_eval.get("results"):
+        if baseline_res.get("results"):
             db.save_question_evaluations(
                 trial_id=f"trial_{experiment_id}_0",
                 experiment_id=experiment_id,
                 iteration_number=baseline_iter_num,
-                question_results=baseline_eval["results"],
+                question_results=baseline_res["results"],
                 db_path=db_path
             )
 

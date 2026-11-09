@@ -15,10 +15,12 @@ import sys
 import tempfile
 import json
 
-# Ensure engine is on path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "engine"))
+# Ensure engine is on path for runtime execution
+engine_path = os.path.join(os.path.dirname(__file__), "..", "engine")
+if engine_path not in sys.path:
+    sys.path.insert(0, engine_path)
 
-from evaluation import (
+from engine.evaluation import (
     EvalSample,
     QuestionEvaluationResult,
     AggregateEvaluationReport,
@@ -35,7 +37,7 @@ from evaluation import (
     calculate_percentile,
     compute_performance_metrics
 )
-import db
+from engine import db
 
 
 class TestEvaluationEngine2(unittest.TestCase):
