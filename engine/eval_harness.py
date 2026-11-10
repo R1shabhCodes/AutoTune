@@ -24,7 +24,8 @@ def evaluate_dataset(
     config: Dict[str, Any],
     filename: str,
     role: str = "tuning",
-    is_experimental: bool = True
+    is_experimental: bool = True,
+    adapter: Optional[Any] = None
 ) -> Dict[str, Any]:
     """
     Evaluates a configuration against a specific JSON dataset file.
@@ -36,17 +37,26 @@ def evaluate_dataset(
         config=config,
         dataset_filename=filename,
         role=role,
-        is_experimental=is_experimental
+        is_experimental=is_experimental,
+        adapter=adapter
     )
     return service.to_legacy_eval_dict(report)
 
 
-def evaluate_config(config: Dict[str, Any], is_experimental: bool = True) -> Dict[str, Any]:
+def evaluate_config(
+    config: Dict[str, Any],
+    is_experimental: bool = True,
+    adapter: Optional[Any] = None
+) -> Dict[str, Any]:
     """Evaluates a RAG configuration against the tuning evaluation set."""
-    return evaluate_dataset(config, "eval_set_tuning.json", role="tuning", is_experimental=is_experimental)
+    return evaluate_dataset(config, "eval_set_tuning.json", role="tuning", is_experimental=is_experimental, adapter=adapter)
 
 
-def evaluate_holdout(config: Dict[str, Any], is_experimental: bool = False) -> Dict[str, Any]:
+def evaluate_holdout(
+    config: Dict[str, Any],
+    is_experimental: bool = False,
+    adapter: Optional[Any] = None
+) -> Dict[str, Any]:
     """
     Evaluates a RAG configuration against the blind holdout evaluation set.
     Holdout questions remain strictly isolated from optimization prompts.

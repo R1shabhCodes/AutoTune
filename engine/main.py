@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import sqlite3
 import asyncio
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -140,6 +140,46 @@ def get_trial_evaluations_endpoint(trial_id: str):
     if not os.path.exists(DB_PATH):
         return []
     return db.get_question_evaluations_for_trial(trial_id)
+
+@app.get("/integrations/adapters")
+def list_adapters_endpoint():
+    """Lists registered RAG adapters and their capabilities."""
+    from engine.integrations import get_adapter_registry
+    registry = get_adapter_registry()
+    return registry.list_adapters()
+
+@app.post("/integrations/connect")
+def connect_adapter_endpoint(payload: Dict[str, Any]):
+    """Connects and registers a remote RAG REST endpoint."""
+    from engine.integrations import get_adapter_registry
+    adapter_id = payload.get("id") or payload.get("name") or "custom_rag"
+    base_url = payload.get("base_url")
+    if not base_url:
+        raise HTTPException(status_code=400, detail="Missing required field 'base_url'")
+    api_key = payload.get("api_key")
+    timeout = float(payload.get("timeout", 10.0))
+    set_active = bool(payload.get("set_active", True))
+
+    registry = get_adapter_registry()
+    try:
+        adapter = registry.register_rest_adapter(
+            adapter_id=adapter_id,
+            base_url=base_url,
+            api_key=api_key,
+            timeout=timeout,
+            set_active=set_active
+        )
+        manifest = adapter.get_manifest()
+        return {
+            "status": "connected",
+            "adapter_id": adapter_id,
+            "application": manifest.application,
+            "mode": manifest.mode,
+            "capabilities": manifest.capabilities.model_dump(),
+            "parameters": list(manifest.parameters.keys())
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/best")
 def get_best_config_endpoint(experiment_id: Optional[str] = Query(None)):

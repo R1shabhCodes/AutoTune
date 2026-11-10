@@ -33,92 +33,136 @@ class EvaluationService:
         config: Dict[str, Any],
         dataset_filename: str = "eval_set_tuning.json",
         role: str = "tuning",
-        is_experimental: bool = True
+        is_experimental: bool = True,
+        adapter: Optional[Any] = None
     ) -> AggregateEvaluationReport:
         """
         Executes an end-to-end evaluation run of a configuration against a dataset.
-        Reuses cached index when chunk parameters are unchanged.
+        If an adapter is supplied, queries are dispatched through the adapter (Universal Mode).
+        Otherwise, falls back to the internal finance RAG pipeline.
         """
         engine_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         dataset = self.dataset_manager.load_dataset(dataset_filename, role=role)
         dataset_hash = self.dataset_manager.compute_dataset_hash(dataset)
 
-        chunk_size = int(config.get("chunk_size", 500))
-        chunk_overlap = int(config.get("chunk_overlap", 50))
-        top_k = int(config.get("top_k", 3))
-        retrieval_strategy = config.get("retrieval_strategy", "vector")
-        prompt_tmpl = config.get(
-            "prompt_template",
-            "Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"
-        )
-        temperature = float(config.get("temperature", 0.0))
-
-        # Build or retrieve cached index namespace
-        collection_name = rag_pipeline.build_index(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            is_experimental=is_experimental
-        )
-        corpus_dir = os.path.join(engine_dir, "corpus")
-        cache_key = rag_pipeline.get_index_cache_key(chunk_size, chunk_overlap, corpus_dir)
-
         samples: List[EvalSample] = []
 
-        for idx, item in enumerate(dataset):
-            q_id = item["id"]
-            question = item["question"]
-            expected_terms = item.get("expected_answer_contains", [])
-            ref_ans = item.get("reference_answer")
-            ref_ctx = item.get("reference_contexts")
-            answerable = item.get("answerable", True)
-            category = item.get("category", "general")
+        if adapter is not None:
+            # Universal evaluation through adapter (REST or In-Process SDK)
+            for idx, item in enumerate(dataset):
+                q_id = item["id"]
+                question = item["question"]
+                expected_terms = item.get("expected_answer_contains", [])
+                ref_ans = item.get("reference_answer")
+                ref_ctx = item.get("reference_contexts")
+                answerable = item.get("answerable", True)
+                category = item.get("category", "general")
 
-            # 1. Retrieve
-            t_ret_start = time.time()
-            chunks = rag_pipeline.retrieve(
-                question,
-                top_k=top_k,
-                strategy=retrieval_strategy,
-                collection_name=collection_name,
-                cache_key=cache_key
+                query_resp = adapter.query(question, config_override=config)
+                raw_contexts = [c.text for c in query_resp.contexts] if query_resp.contexts else []
+                raw_scores = [c.score for c in query_resp.contexts if c.score is not None] if query_resp.contexts else []
+
+                lat = query_resp.latency
+                total_lat = lat.total_ms if lat else 0.0
+                ret_ms = lat.retrieval_ms if lat and lat.retrieval_ms is not None else 0.0
+                gen_ms = lat.generation_ms if lat and lat.generation_ms is not None else 0.0
+
+                tok = query_resp.usage.total_tokens if query_resp.usage and query_resp.usage.total_tokens is not None else (len(query_resp.answer) // 4)
+
+                sample = EvalSample(
+                    id=q_id,
+                    question=question,
+                    generated_answer=query_resp.answer,
+                    retrieved_contexts=raw_contexts,
+                    retrieval_scores=raw_scores,
+                    reference_answer=ref_ans,
+                    reference_contexts=ref_ctx,
+                    expected_terms=expected_terms,
+                    answerable=answerable,
+                    category=category,
+                    latency_ms=round(total_lat, 1),
+                    retrieval_ms=round(ret_ms, 1),
+                    generation_ms=round(gen_ms, 1),
+                    tokens=tok,
+                    is_error=bool(query_resp.error),
+                    error_info={"message": query_resp.error} if query_resp.error else None
+                )
+                samples.append(sample)
+        else:
+            # Built-in Finance pipeline evaluation
+            chunk_size = int(config.get("chunk_size", 500))
+            chunk_overlap = int(config.get("chunk_overlap", 50))
+            top_k = int(config.get("top_k", 3))
+            retrieval_strategy = config.get("retrieval_strategy", "vector")
+            prompt_tmpl = config.get(
+                "prompt_template",
+                "Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"
             )
-            retrieval_ms = (time.time() - t_ret_start) * 1000
+            temperature = float(config.get("temperature", 0.0))
 
-            # 2. Generate
-            t_gen_start = time.time()
-            gen_ans, gen_is_err, gen_err_info = rag_pipeline.generate(
-                query=question,
-                chunks=chunks,
-                prompt_template=prompt_tmpl,
-                temperature=temperature,
-                return_metadata=True
+            collection_name = rag_pipeline.build_index(
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                is_experimental=is_experimental
             )
-            generation_ms = (time.time() - t_gen_start) * 1000
-            total_latency_ms = retrieval_ms + generation_ms
+            corpus_dir = os.path.join(engine_dir, "corpus")
+            cache_key = rag_pipeline.get_index_cache_key(chunk_size, chunk_overlap, corpus_dir)
 
-            # Approximate tokens
-            prompt_text = prompt_tmpl.replace("{context}", "\n\n".join(chunks) if chunks else "").replace("{question}", question)
-            tokens = (len(prompt_text) + len(gen_ans)) // 4
+            for idx, item in enumerate(dataset):
+                q_id = item["id"]
+                question = item["question"]
+                expected_terms = item.get("expected_answer_contains", [])
+                ref_ans = item.get("reference_answer")
+                ref_ctx = item.get("reference_contexts")
+                answerable = item.get("answerable", True)
+                category = item.get("category", "general")
 
-            sample = EvalSample(
-                id=q_id,
-                question=question,
-                generated_answer=gen_ans,
-                retrieved_contexts=chunks,
-                retrieval_scores=[],
-                reference_answer=ref_ans,
-                reference_contexts=ref_ctx,
-                expected_terms=expected_terms,
-                answerable=answerable,
-                category=category,
-                latency_ms=round(total_latency_ms, 1),
-                retrieval_ms=round(retrieval_ms, 1),
-                generation_ms=round(generation_ms, 1),
-                tokens=tokens,
-                is_error=gen_is_err,
-                error_info=gen_err_info
-            )
-            samples.append(sample)
+                # 1. Retrieve
+                t_ret_start = time.time()
+                chunks = rag_pipeline.retrieve(
+                    question,
+                    top_k=top_k,
+                    strategy=retrieval_strategy,
+                    collection_name=collection_name,
+                    cache_key=cache_key
+                )
+                retrieval_ms = (time.time() - t_ret_start) * 1000
+
+                # 2. Generate
+                t_gen_start = time.time()
+                gen_ans, gen_is_err, gen_err_info = rag_pipeline.generate(
+                    query=question,
+                    chunks=chunks,
+                    prompt_template=prompt_tmpl,
+                    temperature=temperature,
+                    return_metadata=True
+                )
+                generation_ms = (time.time() - t_gen_start) * 1000
+                total_latency_ms = retrieval_ms + generation_ms
+
+                # Approximate tokens
+                prompt_text = prompt_tmpl.replace("{context}", "\n\n".join(chunks) if chunks else "").replace("{question}", question)
+                tokens = (len(prompt_text) + len(gen_ans)) // 4
+
+                sample = EvalSample(
+                    id=q_id,
+                    question=question,
+                    generated_answer=gen_ans,
+                    retrieved_contexts=chunks,
+                    retrieval_scores=[],
+                    reference_answer=ref_ans,
+                    reference_contexts=ref_ctx,
+                    expected_terms=expected_terms,
+                    answerable=answerable,
+                    category=category,
+                    latency_ms=round(total_latency_ms, 1),
+                    retrieval_ms=round(retrieval_ms, 1),
+                    generation_ms=round(generation_ms, 1),
+                    tokens=tokens,
+                    is_error=gen_is_err,
+                    error_info=gen_err_info
+                )
+                samples.append(sample)
 
         # Produce aggregate evaluation report
         report = self.provider.evaluate_batch(
