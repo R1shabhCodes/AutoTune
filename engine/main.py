@@ -40,6 +40,10 @@ class RunPayload(BaseModel):
     iterations: int = 15
     experiment_id: Optional[str] = None
     project_id: str = "default"
+    adapter_id: Optional[str] = "default"
+    sampler_type: str = "tpe"  # "tpe" or "random"
+    seed: int = 42
+    objective: Optional[str] = "composite_score"
 
 # WebSocket Connection Manager
 class ConnectionManager:
@@ -78,7 +82,15 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
-async def run_optimization_wrapper(iterations: int, experiment_id: Optional[str] = None, project_id: str = "default"):
+async def run_optimization_wrapper(
+    iterations: int,
+    experiment_id: Optional[str] = None,
+    project_id: str = "default",
+    adapter_id: Optional[str] = "default",
+    sampler_type: str = "tpe",
+    seed: int = 42,
+    objective: Optional[str] = "composite_score"
+):
     """Wrapper to execute the optimization loop in the background and stream updates."""
     global is_running
     try:
@@ -87,12 +99,24 @@ async def run_optimization_wrapper(iterations: int, experiment_id: Optional[str]
                 "type": "iteration",
                 "data": data
             })
-            
-        await agent_loop.run_optimization(
-            num_iterations=iterations,
-            on_iteration_callback=ws_callback,
-            experiment_id=experiment_id,
-            project_id=project_id
+
+        from engine.integrations import get_adapter_registry
+        from engine.optimizer.hybrid_engine import HybridOptimizationEngine
+
+        registry = get_adapter_registry()
+        adapter = registry.get_adapter(adapter_id or "default")
+
+        # Route through HybridOptimizationEngine if adapter is custom or sampler is requested
+        exp_id = experiment_id or f"exp_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        hybrid_engine = HybridOptimizationEngine(adapter=adapter, db_path=DB_PATH)
+        await hybrid_engine.run_study(
+            experiment_id=exp_id,
+            project_id=project_id,
+            trial_budget=iterations,
+            sampler_type=sampler_type,
+            seed=seed,
+            objective_spec={"primary": objective or "composite_score", "direction": "maximize"},
+            on_iteration_callback=ws_callback
         )
     except Exception as e:
         print(f"Error in background optimization task: {e}")
@@ -102,6 +126,44 @@ async def run_optimization_wrapper(iterations: int, experiment_id: Optional[str]
             "type": "status",
             "data": "idle"
         })
+
+@app.post("/promotion/evaluate")
+def evaluate_promotion_endpoint(payload: Dict[str, Any]):
+    """Evaluates candidate configuration eligibility for promotion against blind holdout."""
+    from engine.optimizer.promotion_manager import PromotionManager
+    from engine.integrations import get_adapter_registry
+    pm = PromotionManager()
+    cand_cfg = payload.get("candidate_config")
+    base_cfg = payload.get("baseline_config")
+    adapter_id = payload.get("adapter_id", "default")
+    adapter = get_adapter_registry().get_adapter(adapter_id)
+
+    if not cand_cfg or not base_cfg:
+        raise HTTPException(status_code=400, detail="Missing candidate_config or baseline_config.")
+
+    results = pm.evaluate_promotion_readiness(
+        candidate_config=cand_cfg,
+        baseline_config=base_cfg,
+        adapter=adapter
+    )
+    return results
+
+@app.post("/promotion/promote")
+def promote_configuration_endpoint(payload: Dict[str, Any]):
+    """Explicit promotion: activates candidate configuration and updates production state."""
+    from engine.integrations import get_adapter_registry
+    cand_cfg = payload.get("candidate_config")
+    adapter_id = payload.get("adapter_id", "default")
+    if not cand_cfg:
+        raise HTTPException(status_code=400, detail="Missing candidate_config.")
+
+    adapter = get_adapter_registry().get_adapter(adapter_id)
+    apply_res = adapter.apply_config(cand_cfg)
+    return {
+        "status": "promoted" if apply_res.success else "failed",
+        "active_config": cand_cfg,
+        "message": apply_res.message
+    }
 
 @app.post("/run")
 async def run_optimization_endpoint(payload: RunPayload, background_tasks: BackgroundTasks):
@@ -115,7 +177,11 @@ async def run_optimization_endpoint(payload: RunPayload, background_tasks: Backg
         run_optimization_wrapper,
         payload.iterations,
         payload.experiment_id,
-        payload.project_id
+        payload.project_id,
+        payload.adapter_id,
+        payload.sampler_type,
+        payload.seed,
+        payload.objective
     )
     
     await manager.broadcast({"type": "status", "data": "running"})
