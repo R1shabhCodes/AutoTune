@@ -85,7 +85,7 @@ class HybridOptimizationEngine:
 
         # Record Baseline Trial
         trial_0_id = f"trial_{experiment_id}_0"
-        db.log_iteration(
+        db.log_trial_record(
             iter_num=start_iter_num,
             hypothesis="Baseline evaluation of initial configuration.",
             param="[Baseline]",
@@ -177,7 +177,7 @@ class HybridOptimizationEngine:
             val_resp = self.adapter.validate_config(candidate_config)
             if not val_resp.valid:
                 rejection_msg = f"Candidate validation failed: {'; '.join(val_resp.errors)}"
-                db.log_iteration(
+                db.log_trial_record(
                     iter_num=curr_iter_num,
                     hypothesis=hypothesis,
                     param="invalid_config",
@@ -221,7 +221,7 @@ class HybridOptimizationEngine:
             except Exception as e:
                 # Safe recovery on crash
                 self.adapter.restore_config(best_accepted_config)
-                db.log_iteration(
+                db.log_trial_record(
                     iter_num=curr_iter_num,
                     hypothesis=hypothesis,
                     param="crash",
@@ -270,7 +270,7 @@ class HybridOptimizationEngine:
                 self.adapter.restore_config(best_accepted_config)
 
             # Record iteration and question telemetry
-            db.log_iteration(
+            db.log_trial_record(
                 iter_num=curr_iter_num,
                 hypothesis=hypothesis,
                 param=param_label,

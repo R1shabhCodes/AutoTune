@@ -20,6 +20,38 @@ export default defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true
       },
+      '/health': {
+        target: 'http://localhost:8000',
+        changeOrigin: true
+      },
+      '/overview': {
+        target: 'http://localhost:8000',
+        changeOrigin: true
+      },
+      '/experiments': {
+        target: 'http://localhost:8000',
+        changeOrigin: true
+      },
+      '/integrations': {
+        target: 'http://localhost:8000',
+        changeOrigin: true
+      },
+      '/trials': {
+        target: 'http://localhost:8000',
+        changeOrigin: true
+      },
+      '/promotion': {
+        target: 'http://localhost:8000',
+        changeOrigin: true
+      },
+      '/holdout_score': {
+        target: 'http://localhost:8000',
+        changeOrigin: true
+      },
+      '/report': {
+        target: 'http://localhost:8000',
+        changeOrigin: true
+      },
       '/ws': {
         target: 'ws://localhost:8000',
         ws: true

@@ -52,6 +52,28 @@ class TestAPICompatibility(unittest.TestCase):
         self.assertEqual(res.headers.get("content-type"), "text/markdown; charset=utf-8")
         self.assertIn("# 🎯 AutoTune Optimization Report", res.text)
 
+    def test_health_status_endpoint(self):
+        """Verify /health/status returns structured telemetry without crashing."""
+        res = self.client.get("/health/status")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn("status", data)
+        self.assertIn("backend", data)
+        self.assertIn("optimizer", data)
+        self.assertIn("generator", data)
+
+    def test_overview_summary_endpoint(self):
+        """Verify /overview/summary returns actual aggregated database statistics."""
+        res = self.client.get("/overview/summary")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn("total_experiments", data)
+        self.assertIn("total_trials", data)
+        self.assertIn("accepted_trials", data)
+        self.assertIn("rejected_trials", data)
+        self.assertIn("recent_activity", data)
+        self.assertIsInstance(data["recent_activity"], list)
+
 if __name__ == "__main__":
     unittest.main()
 

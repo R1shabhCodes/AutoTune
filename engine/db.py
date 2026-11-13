@@ -305,6 +305,9 @@ def log_trial_record(
     finally:
         conn.close()
 
+# Backward-compatibility alias
+log_iteration = log_trial_record
+
 def get_experiment_best(experiment_id: str = None, db_path: str = DB_PATH) -> dict:
     """
     Retrieves the best ACCEPTED trial for an experiment.
@@ -467,6 +470,8 @@ def get_question_evaluations_for_trial(trial_id: str, db_path: str = DB_PATH) ->
             ORDER BY id ASC
         """, (trial_id,))
         return [dict(r) for r in cursor.fetchall()]
+    except Exception:
+        return []
     finally:
         conn.close()
 
