@@ -2,6 +2,9 @@
 # Core optimization loop that proposes config changes, evaluates them, and logs results.
 # Refactored in AutoTune 2.0 with formal state management, strict baseline preservation,
 # immutable configuration snapshots, and isolated experimental executions.
+#
+# Memory optimization: rag_pipeline and eval_harness are imported lazily so that
+# importing agent_loop at startup does not trigger heavyweight library loading.
 
 import sys
 import os
@@ -16,8 +19,6 @@ import urllib.error
 from typing import Optional, Dict, Any, List
 
 import config
-import eval_harness
-import rag_pipeline
 import config_validator
 import db
 
@@ -299,6 +300,8 @@ async def run_optimization(
     strict baseline tracking, immutable snapshot logging, and real-time streaming.
     """
     import models as model_provider
+    import eval_harness
+    import rag_pipeline
 
     init_db(db_path)
 

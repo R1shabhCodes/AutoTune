@@ -2,20 +2,24 @@
 # AutoTune 2.0 Evaluation Harness
 # Integrates modular EvaluationService with deterministic metrics, performance percentiles,
 # grounding verification, and failure categorization, while preserving full backward compatibility.
+#
+# Memory optimization: evaluation package is imported lazily to avoid pulling in
+# the full evaluation framework (and its transitive dependencies) at startup.
 
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from typing import Dict, Any, Optional
-from evaluation import EvaluationService, DatasetManager
 
 
-_service_instance: Optional[EvaluationService] = None
+_service_instance: Optional[object] = None
 
-def get_evaluation_service() -> EvaluationService:
+def get_evaluation_service():
+    """Lazily creates and caches the EvaluationService singleton."""
     global _service_instance
     if _service_instance is None:
+        from evaluation import EvaluationService
         _service_instance = EvaluationService(run_semantic_judge=False)
     return _service_instance
 

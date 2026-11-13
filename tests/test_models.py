@@ -59,6 +59,49 @@ class TestModelProviders(unittest.TestCase):
             self.assertEqual(status["optimizer_model"], "qwen2.5:1.5b")
             self.assertEqual(status["generator_model"], "llama3.2:latest")
 
+    def test_ollama_unavailable_without_crash(self):
+        """When Ollama is offline and no Gemini key, validation returns clean error status without exception."""
+        import urllib.error
+        with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("Connection refused [WinError 10061]")), \
+             patch.dict(os.environ, {}, clear=True):
+            status = models.validate_provider_setup()
+            self.assertFalse(status["ollama_available"])
+            self.assertFalse(status["optimizer_ready"])
+            self.assertFalse(status["generator_ready"])
+            self.assertFalse(status["gemini_available"])
+            self.assertTrue(len(status["errors"]) > 0)
+            self.assertIn("refused", status["errors"][0].lower())
+
+    def test_ollama_unavailable_with_gemini_fallback(self):
+        """When Ollama is offline but GEMINI_API_KEY is present, system falls back to Gemini API."""
+        import urllib.error
+        with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("Connection refused")), \
+             patch.dict(os.environ, {"GEMINI_API_KEY": "test-key-12345"}, clear=True):
+            status = models.validate_provider_setup()
+            self.assertFalse(status["ollama_available"])
+            self.assertTrue(status["gemini_available"])
+            self.assertTrue(status["optimizer_ready"])
+            self.assertTrue(status["generator_ready"])
+            self.assertTrue(len(status["warnings"]) > 0)
+
+    def test_embedding_model_disabled_flag(self):
+        """When AUTOTUNE_DISABLE_EMBEDDINGS is set, get_embedding_model returns None without loading PyTorch."""
+        import rag_pipeline
+        rag_pipeline._embedding_model = None
+        with patch.dict(os.environ, {"AUTOTUNE_DISABLE_EMBEDDINGS": "1"}):
+            model = rag_pipeline.get_embedding_model()
+            self.assertIsNone(model)
+
+    def test_vector_retrieval_fallback_to_bm25_when_embedding_unavailable(self):
+        """When embedding model is unavailable, retrieve() automatically falls back to keyword retrieval."""
+        import rag_pipeline
+        rag_pipeline._embedding_model = None
+        with patch.dict(os.environ, {"AUTOTUNE_DISABLE_EMBEDDINGS": "1"}):
+            with patch("rag_pipeline.retrieve_bm25", return_value=["fallback keyword chunk"]) as mock_bm25:
+                results = rag_pipeline.retrieve("test query", top_k=2, strategy="vector")
+                self.assertEqual(results, ["fallback keyword chunk"])
+                mock_bm25.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

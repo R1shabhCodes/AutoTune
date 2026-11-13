@@ -4,7 +4,15 @@
 
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Ensure both the engine directory and the repository root are in sys.path
+# so that `import config` and `from engine.integrations import ...` both resolve
+# regardless of the working directory (critical for Render deployments).
+ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(ENGINE_DIR)
+for _p in [ENGINE_DIR, REPO_ROOT]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 import sqlite3
 import asyncio
@@ -14,10 +22,13 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, Qu
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-import agent_loop
 import config
 import db
 import models
+
+# NOTE: agent_loop is NOT imported at module level to avoid eagerly pulling in
+# rag_pipeline → rank_bm25 → numpy and the full evaluation package at startup.
+# It is imported lazily inside endpoint handlers that need it.
 
 # Run database setup and migrations on boot
 db.apply_migrations()
@@ -35,8 +46,8 @@ app.add_middleware(
 
 # Global run state
 is_running = False
-engine_dir = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(engine_dir, "autotune.db")
+engine_dir = ENGINE_DIR
+DB_PATH = os.path.join(ENGINE_DIR, "autotune.db")
 
 class RunPayload(BaseModel):
     iterations: int = 15
@@ -558,7 +569,7 @@ def get_report_endpoint(run_id: str):
     )
 
 # Mount the static React build files if they exist (dashboard/dist)
-dist_path = os.path.join(os.path.dirname(engine_dir), "dashboard", "dist")
+dist_path = os.path.join(REPO_ROOT, "dashboard", "dist")
 if os.path.exists(dist_path):
     app.mount("/", StaticFiles(directory=dist_path, html=True), name="static")
 else:

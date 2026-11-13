@@ -2,6 +2,9 @@
 # Pure functions for indexing, retrieval, and generation.
 # Enhanced in AutoTune 2.0 with corpus fingerprinting, index caching,
 # and safe experimental namespaces to protect production indices.
+#
+# Memory optimization: rank_bm25 and sentence_transformers are imported lazily
+# so that the FastAPI process can start without loading PyTorch or NumPy eagerly.
 
 import os
 import re
@@ -11,26 +14,56 @@ import hashlib
 import urllib.request
 import urllib.error
 from typing import Optional, Tuple, List, Dict
-from rank_bm25 import BM25Okapi
 
 # Cache embedding model to avoid reloading on every function call
 _embedding_model = None
 
 # In-memory BM25 index cache: cache_key -> (BM25Okapi, list of texts, list of tokenized texts)
-_bm25_cache: Dict[str, Tuple[Optional[BM25Okapi], List[str], List[List[str]]]] = {}
+_bm25_cache: Dict[str, Tuple] = {}
 
 # Active BM25 index globals (for backward compatibility)
 _bm25_index = None
 _bm25_corpus_chunks = []
 _bm25_tokenized = []
 
+# Lazy singleton for BM25Okapi class
+_BM25Okapi = None
+
+def _get_bm25_class():
+    """Lazily imports and caches the BM25Okapi class."""
+    global _BM25Okapi
+    if _BM25Okapi is None:
+        from rank_bm25 import BM25Okapi
+        _BM25Okapi = BM25Okapi
+    return _BM25Okapi
+
 def get_embedding_model():
-    """Singleton to load and cache the local sentence-transformer model."""
+    """
+    Singleton to lazily load and cache the local sentence-transformer model.
+    Returns None if:
+    - AUTOTUNE_DISABLE_EMBEDDINGS=1 is set (memory-constrained deployments)
+    - sentence-transformers / PyTorch is not installed
+    - The model fails to load (OOM, download failure, etc.)
+    
+    When None, the system automatically falls back to BM25 keyword retrieval.
+    """
     global _embedding_model
     if _embedding_model is None:
-        from sentence_transformers import SentenceTransformer
-        print("Loading local sentence-transformer model ('all-MiniLM-L6-v2')...")
-        _embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+        # Allow operators to skip loading the heavy embedding model entirely
+        if os.environ.get("AUTOTUNE_DISABLE_EMBEDDINGS", "").strip() in ("1", "true", "yes"):
+            print("INFO: Embedding model disabled via AUTOTUNE_DISABLE_EMBEDDINGS. Using keyword retrieval only.")
+            return None
+        try:
+            from sentence_transformers import SentenceTransformer
+            model_name = os.environ.get("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+            print(f"Loading local sentence-transformer model ('{model_name}')...")
+            _embedding_model = SentenceTransformer(model_name)
+        except ImportError:
+            print("WARNING: sentence-transformers is not installed. Vector retrieval will be unavailable.")
+            return None
+        except Exception as e:
+            print(f"WARNING: Failed to load embedding model: {e}. Vector retrieval will be unavailable.")
+            return None
     return _embedding_model
 
 def _tokenize(text: str) -> list:
@@ -164,6 +197,19 @@ def build_index(
     # Generate embeddings
     model = get_embedding_model()
     texts = [c["text"] for c in chunks]
+
+    if model is None:
+        print("WARNING: Embedding model unavailable. Building BM25 index only (no vector index).")
+        # Build and cache BM25 index only
+        BM25Okapi = _get_bm25_class()
+        tokenized = [_tokenize(t) for t in texts]
+        bm25 = BM25Okapi(tokenized) if tokenized else None
+        _bm25_cache[cache_key] = (bm25, texts, tokenized)
+        _bm25_index = bm25
+        _bm25_corpus_chunks = texts
+        _bm25_tokenized = tokenized
+        return collection_name
+
     embeddings = model.encode(texts, show_progress_bar=False).tolist()
 
     collection = client.get_or_create_collection(collection_name)
@@ -187,6 +233,7 @@ def build_index(
     )
 
     # Build and cache BM25 index
+    BM25Okapi = _get_bm25_class()
     tokenized = [_tokenize(t) for t in texts]
     bm25 = BM25Okapi(tokenized) if tokenized else None
 
@@ -273,6 +320,9 @@ def retrieve_vector(query: str, top_k: int, collection_name: str = "autotune_rag
             return []
 
     model = get_embedding_model()
+    if model is None:
+        print("WARNING: Embedding model unavailable. Vector retrieval is disabled.")
+        return []
     query_embedding = model.encode([query], show_progress_bar=False)[0].tolist()
 
     results = collection.query(
@@ -336,13 +386,18 @@ def retrieve(query: str, top_k: int, strategy: str = "vector", collection_name: 
     """
     Retrieves the top_k most relevant chunks using the specified strategy.
     Supports targeting experimental namespaces without affecting production.
+    Falls back gracefully to keyword retrieval if the embedding model is unavailable.
     """
     if strategy == "keyword":
         return retrieve_bm25(query, top_k, cache_key=cache_key)
     elif strategy == "hybrid":
         return retrieve_hybrid(query, top_k, collection_name=collection_name, cache_key=cache_key)
     else:
-        return retrieve_vector(query, top_k, collection_name=collection_name)
+        results = retrieve_vector(query, top_k, collection_name=collection_name)
+        if not results and get_embedding_model() is None:
+            # Automatic fallback to BM25 when vector is unavailable
+            return retrieve_bm25(query, top_k, cache_key=cache_key)
+        return results
 
 def call_llm(prompt: str, temperature: float, system_prompt: str = None, return_metadata: bool = False, model_override: Optional[str] = None):
     """
