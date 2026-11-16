@@ -16,6 +16,11 @@ engine/chroma_db/
 apps/rag_finance/chroma_db/
 apps/rag_finance/benchmark_results.json
 apps/rag_finance/config_optimized.json
+autotune.db
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
 
 # Environment Variables
 .env

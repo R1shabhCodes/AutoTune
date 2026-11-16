@@ -1,30 +1,69 @@
 # rag_pipeline.py
 # Pure functions for indexing, retrieval, and generation.
-# This file is fixed and is NOT modified by the optimization agent.
+# Enhanced in AutoTune 2.0 with corpus fingerprinting, index caching,
+# and safe experimental namespaces to protect production indices.
+#
+# Memory optimization: rank_bm25 and sentence_transformers are imported lazily
+# so that the FastAPI process can start without loading PyTorch or NumPy eagerly.
 
 import os
 import re
 import glob
 import json
+import hashlib
 import urllib.request
 import urllib.error
-from rank_bm25 import BM25Okapi
+from typing import Optional, Tuple, List, Dict
 
 # Cache embedding model to avoid reloading on every function call
 _embedding_model = None
 
-# BM25 index globals (rebuilt on each build_index call)
+# In-memory BM25 index cache: cache_key -> (BM25Okapi, list of texts, list of tokenized texts)
+_bm25_cache: Dict[str, Tuple] = {}
+
+# Active BM25 index globals (for backward compatibility)
 _bm25_index = None
-_bm25_corpus_chunks = []   # list of chunk text strings
-_bm25_tokenized = []       # tokenized version for BM25
+_bm25_corpus_chunks = []
+_bm25_tokenized = []
+
+# Lazy singleton for BM25Okapi class
+_BM25Okapi = None
+
+def _get_bm25_class():
+    """Lazily imports and caches the BM25Okapi class."""
+    global _BM25Okapi
+    if _BM25Okapi is None:
+        from rank_bm25 import BM25Okapi
+        _BM25Okapi = BM25Okapi
+    return _BM25Okapi
 
 def get_embedding_model():
-    """Singleton to load and cache the local sentence-transformer model."""
+    """
+    Singleton to lazily load and cache the local sentence-transformer model.
+    Returns None if:
+    - AUTOTUNE_DISABLE_EMBEDDINGS=1 is set (memory-constrained deployments)
+    - sentence-transformers / PyTorch is not installed
+    - The model fails to load (OOM, download failure, etc.)
+    
+    When None, the system automatically falls back to BM25 keyword retrieval.
+    """
     global _embedding_model
     if _embedding_model is None:
-        from sentence_transformers import SentenceTransformer
-        print("Loading local sentence-transformer model ('all-MiniLM-L6-v2')...")
-        _embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+        # Allow operators to skip loading the heavy embedding model entirely
+        if os.environ.get("AUTOTUNE_DISABLE_EMBEDDINGS", "").strip() in ("1", "true", "yes"):
+            print("INFO: Embedding model disabled via AUTOTUNE_DISABLE_EMBEDDINGS. Using keyword retrieval only.")
+            return None
+        try:
+            from sentence_transformers import SentenceTransformer
+            model_name = os.environ.get("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+            print(f"Loading local sentence-transformer model ('{model_name}')...")
+            _embedding_model = SentenceTransformer(model_name)
+        except ImportError:
+            print("WARNING: sentence-transformers is not installed. Vector retrieval will be unavailable.")
+            return None
+        except Exception as e:
+            print(f"WARNING: Failed to load embedding model: {e}. Vector retrieval will be unavailable.")
+            return None
     return _embedding_model
 
 def _tokenize(text: str) -> list:
@@ -47,38 +86,103 @@ def chunk_text(text: str, chunk_size: int, chunk_overlap: int) -> list:
         # Calculate next start position based on overlap
         step = chunk_size - chunk_overlap
         if step <= 0:
-            # Prevent infinite loops if overlap >= chunk_size
             step = 1
         start += step
         
-        # Avoid creating tiny trailing chunks
         if start >= text_len:
             break
             
     return chunks
 
-def build_index(chunk_size: int, chunk_overlap: int):
+def get_corpus_fingerprint(corpus_dir: Optional[str] = None) -> str:
     """
-    Reads all text files in the corpus directory, chunks them,
-    computes embeddings, stores them in ChromaDB, and builds BM25 index.
+    Computes a deterministic SHA256 fingerprint across all text files in the corpus directory.
+    Guarantees index rebuilds trigger if document content changes.
     """
-    global _bm25_index, _bm25_corpus_chunks, _bm25_tokenized
+    if corpus_dir is None:
+        engine_dir = os.path.dirname(os.path.abspath(__file__))
+        corpus_dir = os.path.join(engine_dir, "corpus")
+
+    if not os.path.exists(corpus_dir):
+        return "empty_corpus"
+
+    text_files = sorted(glob.glob(os.path.join(corpus_dir, "*.txt")))
+    if not text_files:
+        return "no_text_files"
+
+    hasher = hashlib.sha256()
+    for fpath in text_files:
+        fname = os.path.basename(fpath)
+        hasher.update(fname.encode("utf-8"))
+        with open(fpath, "rb") as f:
+            while chunk := f.read(65536):
+                hasher.update(chunk)
+
+    return hasher.hexdigest()
+
+def get_index_cache_key(chunk_size: int, chunk_overlap: int, corpus_dir: Optional[str] = None) -> str:
+    """
+    Returns a unique identifier for an index configuration.
+    """
+    fp = get_corpus_fingerprint(corpus_dir)
+    return f"idx_{fp[:8]}_cs{chunk_size}_co{chunk_overlap}"
+
+def build_index(
+    chunk_size: int,
+    chunk_overlap: int,
+    collection_name: Optional[str] = None,
+    is_experimental: bool = False,
+    force_rebuild: bool = False
+) -> str:
+    """
+    Indexes the corpus into ChromaDB and builds the BM25 index.
     
+    When is_experimental=True:
+      - Uses an isolated cache namespace.
+      - If the index for this (corpus_fingerprint, chunk_size, chunk_overlap) already exists,
+        it reuses the cached index immediately without redundant re-embedding.
+      - NEVER touches or modifies the production index ('autotune_rag').
+    """
+    global _bm25_index, _bm25_corpus_chunks, _bm25_tokenized, _bm25_cache
+
     engine_dir = os.path.dirname(os.path.abspath(__file__))
     corpus_dir = os.path.join(engine_dir, "corpus")
     if not os.path.exists(corpus_dir):
         os.makedirs(corpus_dir)
-        
-    text_files = glob.glob(os.path.join(corpus_dir, "*.txt"))
+
+    cache_key = get_index_cache_key(chunk_size, chunk_overlap, corpus_dir)
+
+    if collection_name is None:
+        collection_name = cache_key if is_experimental else "autotune_rag"
+
+    # Setup persistent ChromaDB client
+    import chromadb
+    chroma_path = os.path.join(engine_dir, "chroma_db")
+    client = chromadb.PersistentClient(path=chroma_path)
+
+    # 1. Check if cached index exists in Chroma and BM25 cache
+    if not force_rebuild:
+        try:
+            coll = client.get_collection(collection_name)
+            doc_count = coll.count()
+            if doc_count > 0 and cache_key in _bm25_cache:
+                print(f"Reusing cached index '{collection_name}' ({doc_count} chunks). Skipping re-embedding.")
+                _bm25_index, _bm25_corpus_chunks, _bm25_tokenized = _bm25_cache[cache_key]
+                return collection_name
+        except Exception:
+            pass
+
+    # 2. Build index from corpus
+    text_files = sorted(glob.glob(os.path.join(corpus_dir, "*.txt")))
     if not text_files:
         raise ValueError(f"No text files found in the corpus directory: {corpus_dir}")
-        
+
     chunks = []
     for filepath in text_files:
         filename = os.path.basename(filepath)
         with open(filepath, "r", encoding="utf-8") as f:
             content = f.read()
-            
+
         file_chunks = chunk_text(content, chunk_size, chunk_overlap)
         for idx, chunk_content in enumerate(file_chunks):
             chunks.append({
@@ -86,164 +190,229 @@ def build_index(chunk_size: int, chunk_overlap: int):
                 "source": filename,
                 "index": idx
             })
-            
+
     if not chunks:
         raise ValueError("No chunks were generated from the corpus files.")
-        
+
     # Generate embeddings
     model = get_embedding_model()
     texts = [c["text"] for c in chunks]
+
+    if model is None:
+        print("WARNING: Embedding model unavailable. Building BM25 index only (no vector index).")
+        # Build and cache BM25 index only
+        BM25Okapi = _get_bm25_class()
+        tokenized = [_tokenize(t) for t in texts]
+        bm25 = BM25Okapi(tokenized) if tokenized else None
+        _bm25_cache[cache_key] = (bm25, texts, tokenized)
+        _bm25_index = bm25
+        _bm25_corpus_chunks = texts
+        _bm25_tokenized = tokenized
+        return collection_name
+
     embeddings = model.encode(texts, show_progress_bar=False).tolist()
-    
-    # Setup persistent ChromaDB client
-    import chromadb
-    chroma_path = os.path.join(engine_dir, "chroma_db")
-    client = chromadb.PersistentClient(path=chroma_path)
-    
-    collection = client.get_or_create_collection("autotune_rag")
-    
-    # Clean old documents in a single atomic step to avoid stale cached UUIDs
+
+    collection = client.get_or_create_collection(collection_name)
+
+    # Clear old documents from this specific collection if rebuilding
     try:
         existing = collection.get()
         if existing and "ids" in existing and existing["ids"]:
             collection.delete(ids=existing["ids"])
     except Exception as e:
-        print(f"Warning clearing collection: {e}")
-    
+        print(f"Warning clearing collection '{collection_name}': {e}")
+
     ids = [f"chunk_{i}" for i in range(len(chunks))]
     metadatas = [{"source": c["source"], "index": c["index"]} for c in chunks]
-    
+
     collection.add(
         ids=ids,
         documents=texts,
         embeddings=embeddings,
         metadatas=metadatas
     )
-    
-    # Build BM25 index from the same chunks
-    _bm25_corpus_chunks = texts
-    _bm25_tokenized = [_tokenize(t) for t in texts]
-    if _bm25_tokenized:
-        _bm25_index = BM25Okapi(_bm25_tokenized)
-    else:
-        _bm25_index = None
-    
-    print(f"Index built successfully. Indexed {len(chunks)} chunks from {len(text_files)} files.")
 
-def retrieve_vector(query: str, top_k: int) -> list:
+    # Build and cache BM25 index
+    BM25Okapi = _get_bm25_class()
+    tokenized = [_tokenize(t) for t in texts]
+    bm25 = BM25Okapi(tokenized) if tokenized else None
+
+    _bm25_cache[cache_key] = (bm25, texts, tokenized)
+    _bm25_index = bm25
+    _bm25_corpus_chunks = texts
+    _bm25_tokenized = tokenized
+
+    print(f"Index built successfully in namespace '{collection_name}'. Indexed {len(chunks)} chunks from {len(text_files)} files.")
+    return collection_name
+
+def promote_index_to_production(chunk_size: int, chunk_overlap: int):
+    """
+    Promotes an accepted index configuration into the production collection ('autotune_rag').
+    """
+    engine_dir = os.path.dirname(os.path.abspath(__file__))
+    corpus_dir = os.path.join(engine_dir, "corpus")
+    cache_key = get_index_cache_key(chunk_size, chunk_overlap, corpus_dir)
+
+    import chromadb
+    chroma_path = os.path.join(engine_dir, "chroma_db")
+    client = chromadb.PersistentClient(path=chroma_path)
+
+    try:
+        source_coll = client.get_collection(cache_key)
+        data = source_coll.get(include=["documents", "embeddings", "metadatas"])
+        
+        prod_coll = client.get_or_create_collection("autotune_rag")
+        existing = prod_coll.get()
+        if existing and "ids" in existing and existing["ids"]:
+            prod_coll.delete(ids=existing["ids"])
+            
+        if data and data.get("ids"):
+            prod_coll.add(
+                ids=data["ids"],
+                documents=data["documents"],
+                embeddings=data["embeddings"],
+                metadatas=data["metadatas"]
+            )
+        print(f"Promoted index '{cache_key}' to production ('autotune_rag').")
+    except Exception as e:
+        print(f"Warning: Could not promote index '{cache_key}' directly, falling back to build_index: {e}")
+        build_index(chunk_size, chunk_overlap, collection_name="autotune_rag", is_experimental=False)
+
+def cleanup_experimental_indices(keep_cache_keys: Optional[List[str]] = None, max_keep: int = 10):
+    """
+    Safely prunes old experimental collections in ChromaDB, never touching 'autotune_rag'.
+    """
+    if keep_cache_keys is None:
+        keep_cache_keys = []
+
+    engine_dir = os.path.dirname(os.path.abspath(__file__))
+    import chromadb
+    chroma_path = os.path.join(engine_dir, "chroma_db")
+    client = chromadb.PersistentClient(path=chroma_path)
+
+    collections = client.list_collections()
+    exp_colls = [c for c in collections if c.name.startswith("idx_")]
+
+    if len(exp_colls) > max_keep:
+        to_delete = exp_colls[:-max_keep]
+        for c in to_delete:
+            if c.name not in keep_cache_keys:
+                try:
+                    client.delete_collection(c.name)
+                    print(f"Cleaned up experimental collection '{c.name}'")
+                except Exception:
+                    pass
+
+def retrieve_vector(query: str, top_k: int, collection_name: str = "autotune_rag") -> list:
     """Retrieves the top_k most relevant chunks using vector similarity (ChromaDB)."""
     import chromadb
     engine_dir = os.path.dirname(os.path.abspath(__file__))
     chroma_path = os.path.join(engine_dir, "chroma_db")
     client = chromadb.PersistentClient(path=chroma_path)
     try:
-        collection = client.get_collection("autotune_rag")
+        collection = client.get_collection(collection_name)
     except Exception:
-        print("Warning: ChromaDB collection 'autotune_rag' does not exist. Run build_index first.")
-        return []
-        
+        # Fallback to autotune_rag if experimental collection is missing
+        try:
+            collection = client.get_collection("autotune_rag")
+        except Exception:
+            print(f"Warning: ChromaDB collection '{collection_name}' does not exist.")
+            return []
+
     model = get_embedding_model()
+    if model is None:
+        print("WARNING: Embedding model unavailable. Vector retrieval is disabled.")
+        return []
     query_embedding = model.encode([query], show_progress_bar=False)[0].tolist()
-    
+
     results = collection.query(
         query_embeddings=[query_embedding],
         n_results=top_k
     )
-    
+
     if results and "documents" in results and results["documents"]:
         return results["documents"][0]
     return []
 
-def retrieve_bm25(query: str, top_k: int) -> list:
+def retrieve_bm25(query: str, top_k: int, cache_key: Optional[str] = None) -> list:
     """Retrieves the top_k most relevant chunks using BM25 keyword matching."""
-    global _bm25_index, _bm25_corpus_chunks
-    
-    if _bm25_index is None or not _bm25_corpus_chunks:
-        return []
-    
-    tokenized_query = _tokenize(query)
-    scores = _bm25_index.get_scores(tokenized_query)
-    
-    # Get top-k indices sorted by score descending
-    top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
-    
-    return [_bm25_corpus_chunks[i] for i in top_indices if scores[i] > 0]
+    global _bm25_index, _bm25_corpus_chunks, _bm25_cache
 
-def retrieve_hybrid(query: str, top_k: int) -> list:
+    bm25_idx = _bm25_index
+    corpus_chunks = _bm25_corpus_chunks
+
+    if cache_key and cache_key in _bm25_cache:
+        bm25_idx, corpus_chunks, _ = _bm25_cache[cache_key]
+
+    if bm25_idx is None or not corpus_chunks:
+        return []
+
+    tokenized_query = _tokenize(query)
+    scores = bm25_idx.get_scores(tokenized_query)
+
+    top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
+    return [corpus_chunks[i] for i in top_indices if scores[i] > 0]
+
+def retrieve_hybrid(query: str, top_k: int, collection_name: str = "autotune_rag", cache_key: Optional[str] = None) -> list:
     """
     Hybrid retrieval using Reciprocal Rank Fusion (RRF).
-    Runs both vector search and BM25, fuses results using RRF formula:
-      score(doc) = sum(1 / (k + rank)) across retrievers
+    Runs both vector search and BM25, fuses results using RRF formula.
     """
-    RRF_K = 60  # Standard RRF constant
-    
-    # Fetch more candidates from each retriever, then fuse down to top_k
+    RRF_K = 60
     fetch_k = min(top_k * 2, 20)
-    
-    vector_results = retrieve_vector(query, fetch_k)
-    bm25_results = retrieve_bm25(query, fetch_k)
-    
-    # Compute RRF scores
+
+    vector_results = retrieve_vector(query, fetch_k, collection_name=collection_name)
+    bm25_results = retrieve_bm25(query, fetch_k, cache_key=cache_key)
+
     rrf_scores = {}
-    
     for rank, doc in enumerate(vector_results):
-        doc_key = doc[:200]  # Use prefix as dedup key
+        doc_key = doc[:200]
         rrf_scores[doc_key] = rrf_scores.get(doc_key, 0) + 1.0 / (RRF_K + rank + 1)
-    
+
     for rank, doc in enumerate(bm25_results):
         doc_key = doc[:200]
         rrf_scores[doc_key] = rrf_scores.get(doc_key, 0) + 1.0 / (RRF_K + rank + 1)
-    
-    # Build a map from key -> full doc text
+
     doc_map = {}
     for doc in vector_results + bm25_results:
         doc_key = doc[:200]
         if doc_key not in doc_map:
             doc_map[doc_key] = doc
-    
-    # Sort by RRF score and return top_k
+
     sorted_keys = sorted(rrf_scores.keys(), key=lambda k: rrf_scores[k], reverse=True)[:top_k]
-    
     return [doc_map[k] for k in sorted_keys]
 
-def retrieve(query: str, top_k: int, strategy: str = "vector") -> list:
+def retrieve(query: str, top_k: int, strategy: str = "vector", collection_name: str = "autotune_rag", cache_key: Optional[str] = None) -> list:
     """
     Retrieves the top_k most relevant chunks using the specified strategy.
-    
-    Args:
-        strategy: One of 'vector', 'keyword', 'hybrid'
+    Supports targeting experimental namespaces without affecting production.
+    Falls back gracefully to keyword retrieval if the embedding model is unavailable.
     """
     if strategy == "keyword":
-        return retrieve_bm25(query, top_k)
+        return retrieve_bm25(query, top_k, cache_key=cache_key)
     elif strategy == "hybrid":
-        return retrieve_hybrid(query, top_k)
+        return retrieve_hybrid(query, top_k, collection_name=collection_name, cache_key=cache_key)
     else:
-        return retrieve_vector(query, top_k)
+        results = retrieve_vector(query, top_k, collection_name=collection_name)
+        if not results and get_embedding_model() is None:
+            # Automatic fallback to BM25 when vector is unavailable
+            return retrieve_bm25(query, top_k, cache_key=cache_key)
+        return results
 
-def call_llm(prompt: str, temperature: float, system_prompt: str = None) -> str:
+def call_llm(prompt: str, temperature: float, system_prompt: str = None, return_metadata: bool = False, model_override: Optional[str] = None):
     """
-    Routes the LLM request to the Gemini API (if key is present)
-    or falls back to the local Ollama instance.
+    Routes the LLM request to the configured generator model.
+    Defaults to llama3.2:latest via Ollama, or Gemini API if GEMINI_API_KEY is present.
+    Supports model_override to target alternative models (e.g. glm-5.2:cloud).
     """
-    # Look for API key in environment or .env file
-    gemini_key = os.environ.get("GEMINI_API_KEY")
-    engine_dir = os.path.dirname(os.path.abspath(__file__))
-    env_path = os.path.join(engine_dir, ".env")
-    if not gemini_key and os.path.exists(env_path):
-        with open(env_path) as f:
-            for line in f:
-                if "=" in line and not line.strip().startswith("#"):
-                    k, v = line.strip().split("=", 1)
-                    if k.strip() == "GEMINI_API_KEY":
-                        gemini_key = v.strip().strip('"').strip("'")
-                        break
-                        
+    import models as model_provider
+
+    gemini_key = model_provider.get_env_variable("GEMINI_API_KEY")
+
     if gemini_key:
-        # Cloud LLM: Gemini API
-        model = "gemini-2.5-flash"
+        provider = "gemini"
+        model = model_override or "gemini-2.5-flash"
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_key}"
-        
-        contents = {"parts": [{"text": prompt}]}
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
@@ -252,7 +421,7 @@ def call_llm(prompt: str, temperature: float, system_prompt: str = None) -> str:
         }
         if system_prompt:
             payload["systemInstruction"] = {"parts": [{"text": system_prompt}]}
-            
+
         req = urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),
@@ -262,20 +431,33 @@ def call_llm(prompt: str, temperature: float, system_prompt: str = None) -> str:
         try:
             with urllib.request.urlopen(req, timeout=30) as res:
                 resp = json.loads(res.read().decode("utf-8"))
-                return resp["candidates"][0]["content"]["parts"][0]["text"]
+                text = resp["candidates"][0]["content"]["parts"][0]["text"]
+                if return_metadata:
+                    return text, False, None
+                return text
         except Exception as e:
-            return f"Error calling Gemini API: {str(e)}"
+            cat = "auth_error" if "401" in str(e) or "403" in str(e) else "api_error"
+            err_info = {
+                "provider": provider,
+                "model": model,
+                "category": cat,
+                "exception_type": type(e).__name__,
+                "message": str(e)
+            }
+            err_msg = f"Error calling Gemini API: {str(e)}"
+            if return_metadata:
+                return err_msg, True, err_info
+            return err_msg
     else:
-        # Local LLM: Ollama
-        ollama_url = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+        provider = "ollama"
+        ollama_url = model_provider.get_ollama_base_url()
         url = f"{ollama_url}/api/generate"
-        model = "qwen2.5:1.5b"
-        
-        # Combine system prompt with main prompt for Ollama since API is /api/generate
+        model = model_override or model_provider.get_generator_model()
+
         full_prompt = prompt
         if system_prompt:
             full_prompt = f"System Instruction: {system_prompt}\n\nUser Question:\n{prompt}"
-            
+
         payload = {
             "model": model,
             "prompt": full_prompt,
@@ -284,7 +466,7 @@ def call_llm(prompt: str, temperature: float, system_prompt: str = None) -> str:
                 "temperature": temperature
             }
         }
-        
+
         req = urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),
@@ -292,45 +474,54 @@ def call_llm(prompt: str, temperature: float, system_prompt: str = None) -> str:
             method="POST"
         )
         try:
-            with urllib.request.urlopen(req, timeout=30) as res:
+            with urllib.request.urlopen(req, timeout=120) as res:
                 resp = json.loads(res.read().decode("utf-8"))
-                return resp.get("response", "")
+                text = resp.get("response", "")
+                if return_metadata:
+                    return text, False, None
+                return text
         except Exception as e:
-            return f"Error calling local Ollama (is it running and does it have model 'llama3.2'?): {str(e)}"
+            cat = "connection_refused" if "10061" in str(e) or "refused" in str(e).lower() else "timeout" if "timeout" in str(e).lower() else "runtime_error"
+            err_info = {
+                "provider": provider,
+                "model": model,
+                "category": cat,
+                "exception_type": type(e).__name__,
+                "message": f"Cannot connect to Ollama at {ollama_url}: {str(e)}" if cat == "connection_refused" else str(e)
+            }
+            err_msg = f"Error calling local Ollama (is it running and does it have model '{model}'?): {str(e)}"
+            if return_metadata:
+                return err_msg, True, err_info
+            return err_msg
 
-def generate(query: str, chunks: list, prompt_template: str, temperature: float, history: list = None) -> str:
-    """Formats the prompt with retrieved chunks (context) and calls the active LLM."""
+def generate(query: str, chunks: list, prompt_template: str, temperature: float, history: list = None, return_metadata: bool = False, model_override: Optional[str] = None):
+    """Formats the prompt with retrieved chunks (context) and calls the active generator LLM (default: llama3.2:latest)."""
     context = "\n\n".join(chunks) if chunks else "No context retrieved."
     prompt = prompt_template.replace("{context}", context).replace("{question}", query)
-    return call_llm(prompt, temperature)
+    return call_llm(prompt, temperature, return_metadata=return_metadata, model_override=model_override)
 
 def verify_grounding(answer: str, context_chunks: list, question: str) -> tuple[bool, list]:
     """
     Checks if all numbers/percentages/monetary values in the LLM's answer
     exist in the retrieved context chunks or the user's question.
-    
     Returns: (is_grounded, list_of_ungrounded_numbers)
     """
-    # 1. Clean citations (e.g., [1], [Source: ...]) to avoid checking citation numbers
     clean_answer = re.sub(r'\[[^\]]*\]', ' ', answer)
-    
-    # 2. Extract number tokens: digits, commas, periods, optional %, lakh, cr, etc.
     tokens = re.findall(r'\b\d+(?:[,\.]\d+)*(?:\s*(?:lakh|%|lpa|cr))?\b', clean_answer.lower())
-    
-    # Combine all context text and user question into one normalized string
+
     context_texts = []
     for chunk in context_chunks:
         context_texts.append(str(chunk).lower())
     context_str = " ".join(context_texts) + " " + question.lower()
-    
+
     def check_presence(tok):
         if tok in context_str:
             return True
-            
+
         tok_clean = tok.replace(",", "")
         if tok_clean in context_str:
             return True
-            
+
         if "." in tok:
             try:
                 val = float(tok.replace(" lakh", "").replace("%", ""))
@@ -338,7 +529,7 @@ def verify_grounding(answer: str, context_chunks: list, question: str) -> tuple[
                     return True
             except ValueError:
                 pass
-                
+
         if "lakh" in tok:
             try:
                 num_part = float(tok.split("lakh")[0].strip())
@@ -348,21 +539,20 @@ def verify_grounding(answer: str, context_chunks: list, question: str) -> tuple[
                     return True
             except ValueError:
                 pass
-                
+
         if "%" in tok:
             tok_num = tok.replace("%", "").strip()
             if tok_num in context_str:
                 return True
-                
+
         return False
 
     ungrounded = []
     for tok in tokens:
-        # Ignore generic small numbers that are too common
         if tok.strip() in ["0", "1", "2", "3", "4", "5"]:
             continue
-            
+
         if not check_presence(tok):
             ungrounded.append(tok)
-            
+
     return (len(ungrounded) == 0, list(set(ungrounded)))

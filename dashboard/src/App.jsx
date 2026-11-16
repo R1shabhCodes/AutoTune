@@ -1,790 +1,535 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Play, Activity, Settings, CheckCircle2, XCircle, Info, RefreshCw, Download } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  CheckCircle2, Sparkles, ShieldCheck, Sliders, Server, Cpu, Terminal
+} from 'lucide-react';
 import Navbar from './components/Navbar';
 import LandingPage from './components/LandingPage';
+import NotFoundView from './views/NotFoundView';
+import Sidebar from './components/layout/Sidebar';
+import Header from './components/layout/Header';
+import OverviewView from './views/OverviewView';
+import TrialWorkspaceView from './views/TrialWorkspaceView';
+import LiveMonitor from './components/monitor/LiveMonitor';
+import ExperimentWizard from './components/experiment/ExperimentWizard';
+import ApplicationsView from './views/ApplicationsView';
+import PromotionsView from './views/PromotionsView';
+import EvaluationAnalyticsView from './views/EvaluationAnalyticsView';
+import StatusBadge from './components/common/StatusBadge';
+import MetricCard from './components/common/MetricCard';
+import ErrorBoundary from './components/common/ErrorBoundary';
+import ConsoleSkeleton from './components/common/ConsoleSkeleton';
+import { api } from './api/client';
+
+const VALID_CONSOLE_PAGES = [
+  'overview',
+  'applications',
+  'evaluations',
+  'experiments',
+  'trials',
+  'optimization',
+  'promotions',
+  'settings'
+];
+
+const PAGE_ALIASES = {
+  '': 'overview',
+  'diff': 'promotions',
+  'history': 'trials',
+  'monitor': 'experiments'
+};
+
+function parseRoute(pathname) {
+  const clean = pathname ? pathname.replace(/\/+$/, '') : '';
+  if (clean === '' || clean === '/') {
+    return { view: 'home', page: 'overview' };
+  }
+
+  if (clean === '/console' || clean.startsWith('/console/')) {
+    const rawSub = clean.replace(/^\/console\/?/, '').split('/')[0] || 'overview';
+    const resolvedPage = PAGE_ALIASES[rawSub] || rawSub;
+    if (VALID_CONSOLE_PAGES.includes(resolvedPage)) {
+      return { view: 'console', page: resolvedPage };
+    }
+    return { view: 'not-found', page: '404' };
+  }
+
+  return { view: 'not-found', page: '404' };
+}
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('home'); // 'home' or 'dashboard'
+  const [route, setRoute] = useState(() => parseRoute(window.location.pathname));
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+
+  // Core Data States
+  const [summary, setSummary] = useState(null);
+  const [health, setHealth] = useState(null);
   const [iterations, setIterations] = useState([]);
-  const [status, setStatus] = useState('idle');
   const [bestConfig, setBestConfig] = useState(null);
   const [holdoutScore, setHoldoutScore] = useState(null);
-  const [runCount, setRunCount] = useState(15);
+  const [adapters, setAdapters] = useState([]);
+  const [status, setStatus] = useState('idle');
+  const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
-  const [viewMode, setViewMode] = useState('chart'); // 'chart' or 'table'
-  const [selectedIters, setSelectedIters] = useState([]);
-  const [showCompareModal, setShowCompareModal] = useState(false);
-  
+
+  // WebSocket Resiliency & Live Telemetry States
+  const [wsStatus, setWsStatus] = useState('disconnected');
+  const [lastEventTime, setLastEventTime] = useState(null);
+  const [activeExperimentId, setActiveExperimentId] = useState(null);
+
+  // Trials / Experiment Controls
+  const [runCount, setRunCount] = useState(15);
+  const [isWizardOpen, setIsWizardOpen] = useState(false);
+
   const wsRef = useRef(null);
+  const reconnectTimeoutRef = useRef(null);
+  const pingIntervalRef = useRef(null);
+  const isUnmountedRef = useRef(false);
+  const reconnectDelayRef = useRef(1000);
+  const hasLoadedConsoleDataRef = useRef(false);
 
-  // Helper to fetch holdout score
-  const fetchHoldoutScore = async () => {
-    try {
-      const res = await fetch('/holdout_score');
-      if (res.ok) {
-        const data = await res.json();
-        setHoldoutScore(data.score);
-      }
-    } catch (err) {
-      console.error('Error fetching holdout score:', err);
+  // Synchronize browser history and route state
+  const navigate = useCallback((toPath) => {
+    if (window.location.pathname !== toPath) {
+      window.history.pushState({}, '', toPath);
     }
-  };
-
-  // Helper to fetch history
-  const fetchIterations = async () => {
-    try {
-      const res = await fetch('/iterations');
-      if (res.ok) {
-        const data = await res.json();
-        setIterations(data);
-      }
-    } catch (err) {
-      console.error('Error fetching iterations:', err);
-    }
-  };
-
-  // Helper to fetch current best config
-  const fetchBestConfig = async () => {
-    try {
-      const res = await fetch('/best');
-      if (res.ok) {
-        const data = await res.json();
-        setBestConfig(data);
-        fetchHoldoutScore();
-      }
-    } catch (err) {
-      console.error('Error fetching best config:', err);
-    }
-  };
-
-  // Establish WebSocket connection
-  useEffect(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsHost = window.location.host;
-    // Handle dev vs prod ports
-    const wsUrl = wsHost.includes('5173')
-      ? 'ws://localhost:8000/ws'
-      : `${protocol}//${wsHost}/ws`;
-
-    console.log('Connecting to WebSocket at:', wsUrl);
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'status') {
-          setStatus(msg.data);
-        } else if (msg.type === 'iteration') {
-          const iterData = msg.data;
-          
-          // Prepend new iteration (newest first)
-          setIterations((prev) => {
-            // Check if already exists to prevent duplicate renders
-            if (prev.some(item => item.iteration_number === iterData.iteration_number)) {
-              return prev;
-            }
-            return [iterData, ...prev];
-          });
-          
-          // Refresh best config if accepted
-          if (iterData.accepted) {
-            fetchBestConfig();
-          }
-        }
-      } catch (err) {
-        console.error('Error processing websocket message:', err);
-      }
-    };
-
-    ws.onclose = () => {
-      console.log('WebSocket disconnected. Reconnecting in 3s...');
-      setTimeout(() => {
-        // Simple reconnect logic if component is still mounted
-        if (wsRef.current === ws) {
-          setStatus('idle');
-        }
-      }, 3000);
-    };
-
-    // Load initial data
-    fetchIterations();
-    fetchBestConfig();
-    fetchHoldoutScore();
-
-    return () => {
-      ws.close();
-    };
+    setRoute(parseRoute(toPath));
+    window.scrollTo(0, 0);
   }, []);
 
-  // Run the optimizer
-  const handleStartRun = async () => {
+  useEffect(() => {
+    const handlePopState = () => {
+      setRoute(parseRoute(window.location.pathname));
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  // Preload telemetry during idle time when on Home page
+  useEffect(() => {
+    if (route.view === 'home') {
+      const schedulePreload = window.requestIdleCallback || ((cb) => setTimeout(cb, 1000));
+      const cancelPreload = window.cancelIdleCallback || clearTimeout;
+      const handle = schedulePreload(() => {
+        api.preloadTelemetry();
+      });
+      return () => cancelPreload(handle);
+    }
+  }, [route.view]);
+
+  // Fetch console data with progressive loading and error isolation
+  const fetchConsoleData = useCallback(async (force = false) => {
+    setLoading(true);
     setErrorMsg(null);
     try {
-      const res = await fetch('/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ iterations: runCount })
-      });
-      const data = await res.json();
+      const [healthRes, summaryRes, itersRes, bestRes, adaptersRes] = await Promise.allSettled([
+        api.getHealth({ forceRefresh: force }),
+        api.getOverviewSummary({ forceRefresh: force }),
+        api.getIterations(null, { forceRefresh: force }),
+        api.getBestConfig(null, { forceRefresh: force }),
+        api.getAdapters({ forceRefresh: force })
+      ]);
+
+      if (healthRes.status === 'fulfilled') setHealth(healthRes.value);
+      if (summaryRes.status === 'fulfilled') setSummary(summaryRes.value);
+      if (itersRes.status === 'fulfilled') setIterations(itersRes.value || []);
+      if (bestRes.status === 'fulfilled') setBestConfig(bestRes.value);
+      if (adaptersRes.status === 'fulfilled') {
+        const val = adaptersRes.value;
+        const adList = Array.isArray(val)
+          ? val
+          : Array.isArray(val?.adapters)
+            ? val.adapters
+            : Object.entries(val || {}).map(([id, meta]) => ({
+              adapter_id: id,
+              name: meta.application || id,
+              ...meta
+            }));
+        setAdapters(adList);
+      }
+      hasLoadedConsoleDataRef.current = true;
+    } catch (err) {
+      console.error('Error fetching console data:', err);
+      setErrorMsg('Failed to load platform telemetry from AutoTune backend.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Re-fetch overview and health on demand
+  const refreshTelemetry = useCallback(async () => {
+    try {
+      const [h, s] = await Promise.all([
+        api.getHealth({ forceRefresh: true }),
+        api.getOverviewSummary({ forceRefresh: true })
+      ]);
+      setHealth(h);
+      setSummary(s);
+    } catch (e) {
+      console.error('Error refreshing telemetry:', e);
+    }
+  }, []);
+
+  // Resilient WebSocket Connection Manager (Active strictly when in console)
+  const connectWs = useCallback(() => {
+    if (isUnmountedRef.current || route.view !== 'console') return;
+
+    if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+
+    const wsUrl = api.getWebSocketUrl();
+    setWsStatus('connecting');
+
+    try {
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        if (isUnmountedRef.current) return;
+        setWsStatus('connected');
+        reconnectDelayRef.current = 1000;
+
+        if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+        pingIntervalRef.current = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            try {
+              ws.send('ping');
+            } catch (_) { }
+          }
+        }, 25000);
+      };
+
+      ws.onmessage = (event) => {
+        if (isUnmountedRef.current) return;
+        setWsStatus('connected');
+        setLastEventTime(new Date().toLocaleTimeString());
+
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'status') {
+            setStatus(msg.data);
+            if (msg.data === 'idle') {
+              fetchConsoleData(true);
+            }
+          } else if (msg.type === 'iteration') {
+            const iterData = msg.data;
+            if (iterData.experiment_id) {
+              setActiveExperimentId(iterData.experiment_id);
+            }
+
+            setIterations((prev) => {
+              if (prev.some(item => item.iteration_number === iterData.iteration_number)) {
+                return prev;
+              }
+              return [iterData, ...prev];
+            });
+
+            refreshTelemetry();
+
+            if (iterData.accepted) {
+              api.getBestConfig().then(setBestConfig).catch(console.error);
+            }
+          } else if (msg.type === 'error') {
+            setErrorMsg(typeof msg.data === 'string' ? msg.data : 'Optimization task error');
+          }
+        } catch (err) {
+          console.error('Error processing websocket message:', err);
+        }
+      };
+
+      ws.onclose = () => {
+        if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+        if (isUnmountedRef.current || route.view !== 'console') return;
+
+        setWsStatus('reconnecting');
+        if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = setTimeout(() => {
+          reconnectDelayRef.current = Math.min(10000, reconnectDelayRef.current * 1.5);
+          connectWs();
+        }, reconnectDelayRef.current);
+      };
+
+      ws.onerror = () => {
+        // onclose will handle reconnection
+      };
+    } catch (e) {
+      setWsStatus('disconnected');
+    }
+  }, [route.view, fetchConsoleData, refreshTelemetry]);
+
+  // Manage Console Lifecycle: Load data and open WebSocket only when entering console
+  useEffect(() => {
+    isUnmountedRef.current = false;
+
+    if (route.view === 'console') {
+      if (!hasLoadedConsoleDataRef.current) {
+        fetchConsoleData();
+      }
+      connectWs();
+    } else {
+      // Disconnect WebSocket when leaving console to conserve resources
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+      if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+      if (wsRef.current) {
+        try {
+          wsRef.current.close();
+        } catch (_) { }
+        wsRef.current = null;
+      }
+      setWsStatus('disconnected');
+    }
+
+    return () => {
+      isUnmountedRef.current = true;
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+      if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+      if (wsRef.current) {
+        try {
+          wsRef.current.close();
+        } catch (_) { }
+      }
+    };
+  }, [route.view, connectWs, fetchConsoleData]);
+
+  // Run the optimizer
+  const handleStartRun = async (customPayload = null) => {
+    setErrorMsg(null);
+    try {
+      const payload = customPayload || { iterations: runCount };
+      if (payload.experiment_id) {
+        setActiveExperimentId(payload.experiment_id);
+      }
+      if (payload.iterations) {
+        setRunCount(payload.iterations);
+      }
+
+      const data = await api.startRun(payload);
       if (data.status === 'error') {
         setErrorMsg(data.message);
+        throw new Error(data.message);
       } else {
         setStatus('running');
       }
     } catch (err) {
-      setErrorMsg('Failed to trigger the optimization run. Is the server online?');
+      const msg = err.message || 'Failed to trigger optimization run. Is backend online?';
+      setErrorMsg(msg);
+      throw err;
     }
   };
 
-  // Process data for Recharts (requires oldest first)
-  const chartData = [...iterations]
-    .sort((a, b) => a.iteration_number - b.iteration_number)
-    .map((item) => {
-      const newScoreVal = typeof item.new_score === 'number' ? item.new_score : parseFloat(item.new_score) || 0;
-      const compositeVal = typeof item.composite_score === 'number' ? item.composite_score : parseFloat(item.composite_score) || 0;
-      const latencyVal = typeof item.avg_latency_ms === 'number' ? item.avg_latency_ms : parseFloat(item.avg_latency_ms) || 0;
-      return {
-        iteration: item.iteration_number,
-        score: parseFloat(newScoreVal.toFixed(4)),
-        composite: parseFloat(compositeVal.toFixed(4)),
-        latency: latencyVal,
-        param: item.param,
-        accepted: item.accepted
-      };
-    });
+  // Active target app name
+  const activeAppName = adapters.length > 0
+    ? (adapters[0].name || adapters[0].adapter_id)
+    : 'Finance RAG (Internal)';
 
-  // Custom tool tip for chart
-  const CustomTooltip = ({ active, payload }) => {
-    if (active && payload && payload.length) {
-      const data = payload[0].payload;
-      return (
-        <div style={{
-          background: 'rgba(10, 12, 22, 0.9)',
-          border: '1px solid rgba(255, 255, 255, 0.15)',
-          padding: '0.75rem',
-          borderRadius: '8px',
-          color: '#f3f4f6',
-          fontSize: '0.85rem',
-          minWidth: '220px'
-        }}>
-          <p style={{ fontWeight: 600, borderBottom: '1px solid rgba(255, 255, 255, 0.1)', paddingBottom: '0.25rem', marginBottom: '0.5rem' }}>Iteration {data.iteration}</p>
-          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
-            <div>
-              <span style={{ fontSize: '0.7rem', color: '#9ca3af', display: 'block' }}>Accuracy</span>
-              <span style={{ color: '#8b5cf6', fontWeight: 600 }}>{data.score}</span>
-            </div>
-            <div>
-              <span style={{ fontSize: '0.7rem', color: '#9ca3af', display: 'block' }}>Composite</span>
-              <span style={{ color: '#10b981', fontWeight: 600 }}>{data.composite}</span>
-            </div>
-            {data.latency > 0 && (
-              <div>
-                <span style={{ fontSize: '0.7rem', color: '#9ca3af', display: 'block' }}>Latency</span>
-                <span style={{ color: '#ec4899', fontWeight: 600 }}>{data.latency.toFixed(0)}ms</span>
-              </div>
-            )}
-          </div>
-          {data.param && data.param !== 'None' && (
-            <p style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>
-              Tuned: <span style={{ color: '#06b6d4', fontFamily: 'monospace' }}>{data.param}</span>
-            </p>
-          )}
-          <p style={{
-            fontSize: '0.75rem',
-            color: data.accepted ? '#10b981' : '#ef4444',
-            fontWeight: 500,
-            marginTop: '0.25rem'
-          }}>
-            {data.accepted ? 'Accepted ✓' : 'Rejected ✗'}
-          </p>
-        </div>
-      );
-    }
-    return null;
-  };
-
-  // Phase 4 - Helper functions for Config Reconstruction & Selection Comparison
-  const getConfigAtIteration = (iterNum) => {
-    if (!bestConfig || !bestConfig.config) return null;
-    const config = { ...bestConfig.config };
-    const sortedIters = [...iterations].sort((a, b) => b.iteration_number - a.iteration_number);
-    for (const item of sortedIters) {
-      if (item.iteration_number > iterNum && item.accepted && item.param !== 'None') {
-        const paramKey = item.param;
-        const currentVal = config[paramKey];
-        let oldVal = item.old_value;
-        if (typeof currentVal === 'number') {
-          oldVal = Number(oldVal);
-        }
-        config[paramKey] = oldVal;
-      }
-    }
-    return config;
-  };
-
-  const handleToggleSelect = (iterNum) => {
-    setSelectedIters((prev) => {
-      if (prev.includes(iterNum)) {
-        return prev.filter((id) => id !== iterNum);
-      }
-      if (prev.length >= 2) {
-        return prev;
-      }
-      return [...prev, iterNum];
-    });
-  };
-
-  const isCheckboxDisabled = (iterNum) => {
-    return !selectedIters.includes(iterNum) && selectedIters.length >= 2;
-  };
-
-  // Pre-fetch compared iterations for rendering later
-  const sortedSelected = [...selectedIters].sort((a, b) => a - b);
-  const iterA = iterations.find(it => it.iteration_number === sortedSelected[0]);
-  const iterB = iterations.find(it => it.iteration_number === sortedSelected[1]);
-  const configA = iterA ? getConfigAtIteration(iterA.iteration_number) : null;
-  const configB = iterB ? getConfigAtIteration(iterB.iteration_number) : null;
-
-  const renderConfigCompareRow = (label, key) => {
-    const valA = configA ? configA[key] : 'N/A';
-    const valB = configB ? configB[key] : 'N/A';
-    const isDifferent = valA !== valB;
-    
+  // ROUTE 1: PUBLIC HOME / LANDING PAGE (Default entry point)
+  if (route.view === 'home') {
     return (
-      <tr key={key} className={isDifferent ? 'diff-highlight' : ''}>
-        <td className="param-label">{label}</td>
-        <td className={`param-value ${isDifferent ? 'diff-val-a' : ''}`}>{String(valA)}</td>
-        <td className={`param-value ${isDifferent ? 'diff-val-b' : ''}`}>{String(valB)}</td>
-      </tr>
-    );
-  };
-
-  return (
-    <div className={`app-root ${activeTab === 'home' ? 'mode-landing' : 'mode-dashboard'}`}>
-      <Navbar activeTab={activeTab} setActiveTab={setActiveTab} status={status} />
-
-      {activeTab === 'home' ? (
-        <LandingPage setActiveTab={setActiveTab} />
-      ) : (
-        <div className="app-container">
-          {/* Top Cards Grid */}
-          <div className="top-grid">
-        {/* Controls Card */}
-        <div className="glass-card controls-section">
-          <h2 className="section-title"><Settings size={16} /> Controller</h2>
-          <div className="input-group">
-            <input 
-              type="number" 
-              className="number-input"
-              value={runCount} 
-              onChange={(e) => setRunCount(Math.max(1, parseInt(e.target.value) || 1))}
-              disabled={status === 'running'}
-              min="1"
-              max="50"
-            />
-            <button 
-              className="btn-primary"
-              onClick={handleStartRun}
-              disabled={status === 'running'}
-            >
-              {status === 'running' ? (
-                <>
-                  <RefreshCw className="animate-spin" size={16} /> Tuning...
-                </>
-              ) : (
-                <>
-                  <Play size={16} /> Start Run
-                </>
-              )}
-            </button>
-            <button 
-              className="btn-secondary"
-              onClick={() => { window.location.href = '/report/current'; }}
-              disabled={status === 'running' || iterations.length === 0}
-              title="Download Markdown Report"
-            >
-              <Download size={16} /> Report
-            </button>
-          </div>
-          {errorMsg && <p style={{ color: '#ef4444', fontSize: '0.8rem', marginTop: '0.25rem' }}>{errorMsg}</p>}
-        </div>
-
-        {/* Best Config Card */}
-        <div className="glass-card">
-          <h2 className="section-title"><Activity size={16} /> Current Best Config</h2>
-          {bestConfig ? (
-            <div className="best-config-content">
-              <div className="best-metrics-row">
-                <div className="best-metric-item">
-                  <span className="best-metric-val">
-                    {typeof bestConfig.score === 'number' ? bestConfig.score.toFixed(4) : '---'}
-                  </span>
-                  <span className="best-metric-label">Tuning Accuracy</span>
-                </div>
-                <div className="best-metric-item">
-                  <span className="best-metric-val" style={{ color: 'var(--status-green)' }}>
-                    {typeof bestConfig.composite_score === 'number' ? bestConfig.composite_score.toFixed(4) : '---'}
-                  </span>
-                  <span className="best-metric-label">Composite Score</span>
-                </div>
-                <div className="best-metric-item">
-                  <span className="best-metric-val" style={{ color: '#06b6d4' }}>
-                    {holdoutScore !== null && holdoutScore !== undefined ? holdoutScore.toFixed(4) : '---'}
-                  </span>
-                  <span className="best-metric-label">Holdout Accuracy</span>
-                </div>
-                <div className="best-metric-item">
-                  <span className="best-metric-val" style={{ color: '#ec4899' }}>
-                    {typeof bestConfig.avg_latency_ms === 'number' && bestConfig.avg_latency_ms > 0
-                      ? `${bestConfig.avg_latency_ms.toFixed(0)}ms`
-                      : '---'}
-                  </span>
-                  <span className="best-metric-label">Avg Latency</span>
-                </div>
-                <div className="best-metric-item">
-                  <span className="best-metric-val" style={{ color: '#eab308' }}>
-                    {typeof bestConfig.total_tokens === 'number' && bestConfig.total_tokens > 0
-                      ? bestConfig.total_tokens.toLocaleString()
-                      : '---'}
-                  </span>
-                  <span className="best-metric-label">Total Tokens</span>
-                </div>
-              </div>
-              <div className="config-grid">
-                <div className="config-item">
-                  <div className="config-label">chunk_size</div>
-                  <div className="config-val">{bestConfig.config.chunk_size}</div>
-                </div>
-                <div className="config-item">
-                  <div className="config-label">overlap</div>
-                  <div className="config-val">{bestConfig.config.chunk_overlap}</div>
-                </div>
-                <div className="config-item">
-                  <div className="config-label">top_k</div>
-                  <div className="config-val">{bestConfig.config.top_k}</div>
-                </div>
-                <div className="config-item">
-                  <div className="config-label">temp</div>
-                  <div className="config-val">{bestConfig.config.temperature}</div>
-                </div>
-              </div>
-              <div className="prompt-template-preview" title="Current prompt template">
-                {bestConfig.config.prompt_template}
-              </div>
-            </div>
-          ) : (
-            <div className="empty-feed" style={{ padding: '0.5rem 0' }}>
-              <p style={{ fontSize: '0.85rem' }}>No evaluation completed yet.</p>
-            </div>
-          )}
-        </div>
+      <div className="app-root mode-landing">
+        <Navbar currentPath="/" onNavigate={navigate} status={status} />
+        <LandingPage onNavigate={navigate} />
       </div>
+    );
+  }
 
-      {/* Main Sections Grid */}
-      <div className="dashboard-grid">
-        {/* Left Column: Progress Chart / Table View */}
-        <div className="glass-card column-card chart-card">
-          <div className="chart-header-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              <h2 className="section-title" style={{ margin: 0 }}>Optimization Progress</h2>
-              {viewMode === 'table' && selectedIters.length === 2 && (
-                <button 
-                  className="btn-primary compare-btn animate-pulse"
-                  onClick={() => setShowCompareModal(true)}
-                  style={{ padding: '0.25rem 0.6rem', fontSize: '0.7rem', height: '24px', display: 'flex', alignItems: 'center', gap: '0.25rem', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
-                >
-                  📊 Compare (2 Selected)
-                </button>
-              )}
-            </div>
-            <div className="tab-selector">
-              <button 
-                className={`tab-btn ${viewMode === 'chart' ? 'active' : ''}`}
-                onClick={() => setViewMode('chart')}
-              >
-                Chart
-              </button>
-              <button 
-                className={`tab-btn ${viewMode === 'table' ? 'active' : ''}`}
-                onClick={() => setViewMode('table')}
-              >
-                Table
-              </button>
-            </div>
-          </div>
+  // ROUTE 2: NOT FOUND (404 Page)
+  if (route.view === 'not-found') {
+    return (
+      <div className="app-root mode-landing">
+        <Navbar currentPath={window.location.pathname} onNavigate={navigate} status={status} />
+        <NotFoundView onNavigate={navigate} />
+      </div>
+    );
+  }
 
-          {chartData.length > 0 ? (
-            viewMode === 'chart' ? (
-              <div className="chart-wrapper">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={chartData} margin={{ top: 10, right: 20, left: -20, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                    <XAxis 
-                      dataKey="iteration" 
-                      stroke="var(--text-secondary)" 
-                      tickLine={false}
-                      fontSize={12}
-                    />
-                    <YAxis 
-                      stroke="var(--text-secondary)" 
-                      domain={[0.0, 1.0]} 
-                      tickLine={false}
-                      fontSize={12}
-                      tickFormatter={(val) => val.toFixed(1)}
-                    />
-                    <Tooltip content={<CustomTooltip />} />
-                    <Line 
-                      type="monotone" 
-                      dataKey="score" 
-                      name="Accuracy"
-                      stroke="#8b5cf6" 
-                      strokeWidth={1.5}
-                      strokeDasharray="5 5"
-                      dot={(props) => {
-                        const { cx, cy, payload } = props;
-                        if (!payload || payload.iteration === 0) return null;
-                        return (
-                          <circle 
-                            key={`${payload.iteration}-accuracy-dot`}
-                            cx={cx} 
-                            cy={cy} 
-                            r={3.5} 
-                            fill={payload.accepted ? 'var(--status-green)' : 'var(--status-red)'}
-                            stroke="none"
-                          />
-                        );
-                      }}
-                      activeDot={{ r: 5, strokeWidth: 0 }}
-                    />
-                    <Line 
-                      type="monotone" 
-                      dataKey="composite" 
-                      name="Composite Score"
-                      stroke="#10b981" 
-                      strokeWidth={3.5}
-                      dot={(props) => {
-                        const { cx, cy, payload } = props;
-                        if (!payload || payload.iteration === 0) return null;
-                        return (
-                          <circle 
-                            key={`${payload.iteration}-composite-dot`}
-                            cx={cx} 
-                            cy={cy} 
-                            r={4.5} 
-                            fill={payload.accepted ? 'var(--status-green)' : 'var(--status-red)'}
-                            stroke="none"
-                          />
-                        );
-                      }}
-                      activeDot={{ r: 6.5, strokeWidth: 0 }}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
+  // ROUTE 3: CONSOLE / DEVELOPER WORKSPACE (/console)
+  return (
+    <div className="dev-workspace">
+      {/* Universal Sidebar */}
+      <Sidebar
+        activePage={route.page}
+        setActivePage={(pageId) => navigate(`/console/${pageId}`)}
+        isCollapsed={isSidebarCollapsed}
+        onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+      />
+
+      <div className="dev-main">
+        {/* Universal Top Header */}
+        <Header
+          health={health}
+          activeApp={activeAppName}
+          activePage={route.page}
+          onDownloadReport={() => { window.location.href = '/report/current'; }}
+          wsStatus={wsStatus}
+          runStatus={status}
+          onNavigateHome={() => navigate('/')}
+          onToggleSidebar={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+          isSidebarCollapsed={isSidebarCollapsed}
+        />
+
+        {/* Dynamic Page Content with Progressive Loading */}
+        <div className="dev-content-scroll">
+          <ErrorBoundary key={route.page} onReset={() => navigate('/console/overview')}>
+            {loading && !hasLoadedConsoleDataRef.current ? (
+              <ConsoleSkeleton />
             ) : (
-              <div className="table-wrapper" style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-                <table className="experiment-table">
-                  <thead>
-                    <tr>
-                      <th style={{ width: '50px', textAlign: 'center' }}>Select</th>
-                      <th style={{ width: '60px' }}>Iter #</th>
-                      <th>Parameter Tuned</th>
-                      <th>Accuracy</th>
-                      <th>Latency</th>
-                      <th>Tokens</th>
-                      <th>Composite</th>
-                      <th style={{ width: '90px' }}>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[...iterations].sort((a, b) => b.iteration_number - a.iteration_number).map((item) => {
-                      const isSelected = selectedIters.includes(item.iteration_number);
-                      const isDisabled = isCheckboxDisabled(item.iteration_number);
-                      const scores = {
-                        newAcc: item.new_score,
-                        newComp: item.composite_score !== undefined && item.composite_score !== null ? item.composite_score : item.new_score,
-                        oldAcc: item.old_score,
-                      };
-                      return (
-                        <tr 
-                          key={item.iteration_number} 
-                          className={`${isSelected ? 'selected' : ''} ${item.accepted ? 'accepted' : 'rejected'}`}
-                        >
-                          <td style={{ textAlign: 'center' }}>
-                            <input 
-                              type="checkbox"
-                              checked={isSelected}
-                              disabled={isDisabled}
-                              onChange={() => handleToggleSelect(item.iteration_number)}
-                              style={{ cursor: 'pointer' }}
-                            />
-                          </td>
-                          <td>#{item.iteration_number}</td>
-                          <td style={{ fontFamily: 'monospace', color: 'var(--accent-cyan)' }}>
-                            {item.param !== 'None' ? item.param : <span style={{ color: 'var(--text-secondary)' }}>Baseline</span>}
-                          </td>
-                          <td>
-                            {item.iteration_number === 0 ? (
-                              scores.newAcc.toFixed(4)
-                            ) : (
-                              `${scores.oldAcc.toFixed(3)} → ${scores.newAcc.toFixed(3)}`
-                            )}
-                          </td>
-                          <td>
-                            {item.avg_latency_ms > 0 ? `${item.avg_latency_ms.toFixed(0)}ms` : '---'}
-                          </td>
-                          <td>
-                            {item.total_tokens > 0 ? item.total_tokens.toLocaleString() : '---'}
-                          </td>
-                          <td>
-                            {scores.newComp.toFixed(4)}
-                          </td>
-                          <td>
-                            <span className={`badge ${item.accepted ? 'accepted' : 'rejected'}`} style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem' }}>
-                              {item.accepted ? 'Accepted' : 'Rejected'}
-                            </span>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )
-          ) : (
-            <div className="empty-feed">
-              <span className="empty-icon">📈</span>
-              <p>Waiting for run to start...</p>
-            </div>
-          )}
-        </div>
+              <>
+                {route.page === 'overview' && (
+                  <OverviewView
+                    summary={summary}
+                    health={health}
+                    iterations={iterations}
+                    loading={loading}
+                    error={errorMsg}
+                    onRefresh={() => fetchConsoleData(true)}
+                    onNavigate={(pageId) => navigate(`/console/${pageId}`)}
+                  />
+                )}
 
-        {/* Right Column: Iteration Feed */}
-        <div className="glass-card column-card">
-          <h2 className="section-title">Iteration Log</h2>
-          <div className="feed-wrapper">
-            {iterations.length > 0 ? (
-              iterations.map((item) => {
-                // Determine scores for progression
-                const newAcc = item.new_score;
-                const newComp = item.composite_score !== undefined && item.composite_score !== null 
-                  ? item.composite_score 
-                  : item.new_score;
-                  
-                let oldAcc = item.old_score;
-                let oldComp = item.old_score; // fallback
-                
-                if (item.iteration_number > 0) {
-                  // Find the previous accepted iteration to show real progress
-                  const prevAccepted = iterations.find(
-                    (it) => it.iteration_number < item.iteration_number && it.accepted
-                  );
-                  if (prevAccepted) {
-                    oldAcc = prevAccepted.new_score;
-                    oldComp = prevAccepted.composite_score !== undefined && prevAccepted.composite_score !== null
-                      ? prevAccepted.composite_score
-                      : prevAccepted.new_score;
-                  }
-                }
+                {route.page === 'experiments' && (
+                  <LiveMonitor
+                    status={status}
+                    wsStatus={wsStatus}
+                    lastEventTime={lastEventTime}
+                    activeExperimentId={activeExperimentId}
+                    trialBudget={runCount}
+                    iterations={iterations}
+                    bestConfig={bestConfig}
+                    holdoutScore={holdoutScore}
+                    errorMsg={errorMsg}
+                    onOpenWizard={() => setIsWizardOpen(true)}
+                    activeAppName={activeAppName}
+                  />
+                )}
 
-                return (
-                  <div 
-                    key={item.iteration_number} 
-                    className={`feed-item ${item.accepted ? 'accepted' : 'rejected'}`}
-                  >
-                    <div className="feed-item-header">
-                      <span className="feed-item-title">
-                        Iteration #{item.iteration_number}
-                        <span className={`badge ${item.accepted ? 'accepted' : 'rejected'}`}>
-                          {item.accepted ? 'Accepted' : 'Rejected'}
-                        </span>
-                        {typeof item.avg_latency_ms === 'number' && item.avg_latency_ms > 0 && (
-                          <span className="feed-header-badge latency-badge">
-                            ⚡ {item.avg_latency_ms.toFixed(0)}ms
-                          </span>
-                        )}
-                        {typeof item.total_tokens === 'number' && item.total_tokens > 0 && (
-                          <span className="feed-header-badge token-badge">
-                            🪙 {item.total_tokens} tokens
-                          </span>
-                        )}
-                      </span>
-                      <span className="feed-timestamp">{item.timestamp}</span>
+                {route.page === 'trials' && (
+                  <TrialWorkspaceView
+                    iterations={iterations}
+                    bestConfig={bestConfig}
+                    holdoutScore={holdoutScore}
+                    status={status}
+                    runCount={runCount}
+                    setRunCount={setRunCount}
+                    onStartRun={handleStartRun}
+                    errorMsg={errorMsg}
+                    onDownloadReport={() => { window.location.href = '/report/current'; }}
+                    adapters={adapters}
+                  />
+                )}
+
+                {route.page === 'applications' && (
+                  <ApplicationsView
+                    adapters={adapters}
+                    onRefresh={() => fetchConsoleData(true)}
+                  />
+                )}
+
+                {route.page === 'evaluations' && (
+                  <EvaluationAnalyticsView
+                    iterations={iterations}
+                    holdoutScore={holdoutScore}
+                    bestConfig={bestConfig}
+                    onDownloadReport={() => { window.location.href = '/report/current'; }}
+                  />
+                )}
+
+                {route.page === 'optimization' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)' }}>
+                    <div>
+                      <h1 style={{ fontSize: 'var(--text-lg)', fontWeight: 600, color: 'var(--color-ink)', margin: 0 }}>
+                        Hybrid Optimization Architecture
+                      </h1>
+                      <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-muted)', margin: 'var(--space-2xs) 0 0 0' }}>
+                        Optuna TPE Bayesian exploration coupled with local LLM failure diagnosis.
+                      </p>
                     </div>
 
-                    {item.hypothesis && item.iteration_number > 0 && (
-                      <p className="feed-hypothesis">
-                        &ldquo;{item.hypothesis}&rdquo;
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 'var(--space-sm)' }}>
+                      <MetricCard title="Bayesian Engine" value="Optuna TPE" subtitle="SQLite persistent study" icon={Sliders} color="var(--color-accent)" />
+                      <MetricCard title="Diagnostician" value="Qwen 2.5 1.5B" subtitle="Ollama local LLM reasoning" icon={Cpu} color="var(--color-cool)" />
+                      <MetricCard title="Generator" value="Llama 3.2 3B" subtitle="Target RAG response generator" icon={Terminal} color="var(--color-cool)" />
+                    </div>
+                  </div>
+                )}
+
+                {route.page === 'promotions' && (
+                  <PromotionsView
+                    bestConfig={bestConfig}
+                    holdoutScore={holdoutScore}
+                    adapters={adapters}
+                    onRefresh={() => fetchConsoleData(true)}
+                  />
+                )}
+
+                {route.page === 'settings' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)' }}>
+                    <div>
+                      <h1 style={{ fontSize: 'var(--text-lg)', fontWeight: 600, color: 'var(--color-ink)', margin: 0 }}>
+                        System Settings &amp; Connectivity
+                      </h1>
+                      <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-muted)', margin: 'var(--space-2xs) 0 0 0' }}>
+                        Configured model providers, Ollama endpoints, and backend telemetry parameters.
                       </p>
-                    )}
+                    </div>
 
-                    {item.motivated_by && item.iteration_number > 0 && (
-                      <div className="feed-motivated-by" style={{ margin: '0.2rem 0 0.5rem 0', fontSize: '0.72rem', color: '#38bdf8', background: 'rgba(56, 189, 248, 0.05)', border: '1px solid rgba(56, 189, 248, 0.15)', padding: '0.15rem 0.4rem', borderRadius: '4px', display: 'inline-block', lineHeight: '1.2' }}>
-                        <span style={{ fontWeight: 600 }}>Targeting:</span> {item.motivated_by.split(' | ').join(', ')}
-                      </div>
-                    )}
-
-                    <div className="feed-change-grid">
-                      <div className="param-diff">
-                        {item.iteration_number === 0 ? (
-                          <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Baseline Setup</span>
-                        ) : (
-                          <>
-                            <span className="param-name">{item.param}</span>:
-                            <span className="diff-old">{item.old_value}</span>
-                            <span>&rarr;</span>
-                            <span className="diff-new">{item.new_value}</span>
-                          </>
-                        )}
-                      </div>
-                      
-                      <div className="scores-diff-container">
-                        <div className={`score-progress ${item.accepted ? 'improved' : ''}`}>
-                          <span className="score-diff-label">Acc:</span>
-                          {item.iteration_number === 0 ? (
-                            <span>{newAcc.toFixed(4)}</span>
-                          ) : (
-                            <>
-                              <span>{oldAcc.toFixed(3)}</span>
-                              <span>&rarr;</span>
-                              <span>{newAcc.toFixed(3)}</span>
-                            </>
-                          )}
+                    <div className="console-panel" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-xs)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 'var(--space-2xs) 0', borderBottom: 'var(--rule-hair) solid var(--color-rule)' }}>
+                        <span style={{ color: 'var(--color-muted)', fontSize: 'var(--text-xs)' }}>Inference provider:</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-xs)' }}>
+                          <span style={{ fontFamily: 'var(--font-outlier)', color: 'var(--color-ink)', fontSize: 'var(--text-xs)' }}>
+                            {health?.inference_url || 'Configured endpoint (http://localhost:11434)'}
+                          </span>
+                          <StatusBadge
+                            status={health?.ollama_available ? 'healthy' : 'degraded'}
+                            label={health?.ollama_available ? 'Connected' : 'Unreachable'}
+                          />
                         </div>
-                        <div className={`score-progress ${item.accepted ? 'improved' : ''}`}>
-                          <span className="score-diff-label">Comp:</span>
-                          {item.iteration_number === 0 ? (
-                            <span>{newComp.toFixed(4)}</span>
-                          ) : (
-                            <>
-                              <span>{oldComp.toFixed(3)}</span>
-                              <span>&rarr;</span>
-                              <span>{newComp.toFixed(3)}</span>
-                            </>
-                          )}
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 'var(--space-2xs) 0', borderBottom: 'var(--rule-hair) solid var(--color-rule)' }}>
+                        <span style={{ color: 'var(--color-muted)', fontSize: 'var(--text-xs)' }}>Optimization engine:</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-xs)' }}>
+                          <span style={{ fontFamily: 'var(--font-outlier)', color: 'var(--color-accent)', fontSize: 'var(--text-xs)' }}>
+                            {health?.optimizer?.model || (typeof health?.optimizer === 'string' ? health.optimizer : 'qwen2.5:1.5b')}
+                          </span>
+                          <StatusBadge
+                            status={health?.optimizer?.ready ? 'healthy' : 'degraded'}
+                            label={health?.optimizer?.ready ? 'Ready' : 'Not Loaded'}
+                          />
                         </div>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 'var(--space-2xs) 0', borderBottom: 'var(--rule-hair) solid var(--color-rule)' }}>
+                        <span style={{ color: 'var(--color-muted)', fontSize: 'var(--text-xs)' }}>Response generation engine:</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-xs)' }}>
+                          <span style={{ fontFamily: 'var(--font-outlier)', color: 'var(--color-cool)', fontSize: 'var(--text-xs)' }}>
+                            {health?.generator?.model || (typeof health?.generator === 'string' ? health.generator : 'llama3.2:latest')}
+                          </span>
+                          <StatusBadge
+                            status={health?.generator?.ready ? 'healthy' : 'degraded'}
+                            label={health?.generator?.ready ? 'Ready' : 'Not Loaded'}
+                          />
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 'var(--space-2xs) 0' }}>
+                        <span style={{ color: 'var(--color-muted)', fontSize: 'var(--text-xs)' }}>Backend service:</span>
+                        <StatusBadge status={health?.status === 'healthy' ? 'healthy' : (health?.status === 'degraded' ? 'degraded' : 'unhealthy')} label={health?.status || 'Unknown'} />
                       </div>
                     </div>
                   </div>
-                );
-              })
-            ) : (
-              <div className="empty-feed">
-                <span className="empty-icon">📋</span>
-                <p>No iterations logged yet.</p>
-                <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                  Click "Start Run" to begin optimization.
-                </p>
-              </div>
+                )}
+              </>
             )}
-          </div>
+          </ErrorBoundary>
         </div>
       </div>
 
-      {/* Comparison Overlay Modal */}
-      {showCompareModal && iterA && iterB && (
-        <div className="compare-modal-overlay">
-          <div className="compare-modal-card glass-card">
-            <div className="compare-modal-header">
-              <h3>Configuration Comparison</h3>
-              <button className="close-modal-btn" onClick={() => setShowCompareModal(false)}>✕</button>
-            </div>
-            
-            <div className="compare-modal-content">
-              {/* Split Headers */}
-              <div className="compare-split-headers">
-                <div className="compare-header-col">
-                  <h4>Iteration #{iterA.iteration_number}</h4>
-                  <span className={`badge ${iterA.accepted ? 'accepted' : 'rejected'}`}>
-                    {iterA.accepted ? 'Accepted' : 'Rejected'}
-                  </span>
-                </div>
-                <div className="compare-header-col">
-                  <h4>Iteration #{iterB.iteration_number}</h4>
-                  <span className={`badge ${iterB.accepted ? 'accepted' : 'rejected'}`}>
-                    {iterB.accepted ? 'Accepted' : 'Rejected'}
-                  </span>
-                </div>
-              </div>
-              
-              {/* Hypotheses */}
-              <div className="compare-hypotheses">
-                <div className="compare-hyp-col">
-                  <div className="compare-section-title">Hypothesis</div>
-                  <p className="compare-hyp-text">&ldquo;{iterA.hypothesis || 'Baseline Setup'}&rdquo;</p>
-                  {iterA.motivated_by && (
-                    <div className="compare-mot-text">Targeted: {iterA.motivated_by}</div>
-                  )}
-                </div>
-                <div className="compare-hyp-col">
-                  <div className="compare-section-title">Hypothesis</div>
-                  <p className="compare-hyp-text">&ldquo;{iterB.hypothesis || 'Baseline Setup'}&rdquo;</p>
-                  {iterB.motivated_by && (
-                    <div className="compare-mot-text">Targeted: {iterB.motivated_by}</div>
-                  )}
-                </div>
-              </div>
-              
-              {/* Metrics */}
-              <div className="compare-metrics-section">
-                <div className="compare-section-title" style={{ gridColumn: 'span 3', textAlign: 'center', marginBottom: '0.5rem' }}>Metrics Comparison</div>
-                
-                <div className="compare-metric-row">
-                  <span className="metric-label">Accuracy Score</span>
-                  <span className="metric-val" style={{ color: '#8b5cf6' }}>{iterA.new_score.toFixed(4)}</span>
-                  <span className="metric-val" style={{ color: '#8b5cf6' }}>{iterB.new_score.toFixed(4)}</span>
-                </div>
-                
-                <div className="compare-metric-row">
-                  <span className="metric-label">Composite Score</span>
-                  <span className="metric-val" style={{ color: '#10b981' }}>
-                    {(iterA.composite_score !== undefined && iterA.composite_score !== null ? iterA.composite_score : iterA.new_score).toFixed(4)}
-                  </span>
-                  <span className="metric-val" style={{ color: '#10b981' }}>
-                    {(iterB.composite_score !== undefined && iterB.composite_score !== null ? iterB.composite_score : iterB.new_score).toFixed(4)}
-                  </span>
-                </div>
-                
-                <div className="compare-metric-row">
-                  <span className="metric-label">Avg Latency</span>
-                  <span className="metric-val">{iterA.avg_latency_ms > 0 ? `${iterA.avg_latency_ms.toFixed(0)}ms` : '---'}</span>
-                  <span className="metric-val">{iterB.avg_latency_ms > 0 ? `${iterB.avg_latency_ms.toFixed(0)}ms` : '---'}</span>
-                </div>
-                
-                <div className="compare-metric-row">
-                  <span className="metric-label">Token Cost</span>
-                  <span className="metric-val">{iterA.total_tokens > 0 ? iterA.total_tokens.toLocaleString() : '---'}</span>
-                  <span className="metric-val">{iterB.total_tokens > 0 ? iterB.total_tokens.toLocaleString() : '---'}</span>
-                </div>
-              </div>
-              
-              {/* Parameter Table */}
-              <div className="compare-config-section">
-                <div className="compare-section-title" style={{ marginBottom: '0.5rem' }}>Pipeline Parameters</div>
-                <table className="compare-config-table">
-                  <thead>
-                    <tr>
-                      <th style={{ textAlign: 'left' }}>Parameter</th>
-                      <th>Iter #{iterA.iteration_number} Config</th>
-                      <th>Iter #{iterB.iteration_number} Config</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {renderConfigCompareRow('Chunk Size', 'chunk_size')}
-                    {renderConfigCompareRow('Chunk Overlap', 'chunk_overlap')}
-                    {renderConfigCompareRow('Top K', 'top_k')}
-                    {renderConfigCompareRow('Temperature', 'temperature')}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-        </div>
-      )}
+      {/* Experiment Configuration Wizard Modal */}
+      <ExperimentWizard
+        isOpen={isWizardOpen}
+        onClose={() => setIsWizardOpen(false)}
+        onLaunch={handleStartRun}
+        adapters={adapters}
+        isSystemRunning={status === 'running'}
+      />
     </div>
   );
 }
