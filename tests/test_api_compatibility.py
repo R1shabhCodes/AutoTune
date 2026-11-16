@@ -1,5 +1,5 @@
 # test_api_compatibility.py
-# Tests ensuring 100% backward compatibility for all existing API routes.
+# Tests ensuring strict backward compatibility for all existing API routes.
 
 import sys
 import os
@@ -73,6 +73,21 @@ class TestAPICompatibility(unittest.TestCase):
         self.assertIn("rejected_trials", data)
         self.assertIn("recent_activity", data)
         self.assertIsInstance(data["recent_activity"], list)
+
+    def test_spa_root_and_console_routing(self):
+        """Verify that / and /console both return the SPA index.html while API routes retain precedence."""
+        res_root = self.client.get("/")
+        self.assertEqual(res_root.status_code, 200)
+        self.assertIn("<html", res_root.text.lower())
+
+        res_console = self.client.get("/console")
+        self.assertEqual(res_console.status_code, 200)
+        self.assertIn("<html", res_console.text.lower())
+
+        # Verify that explicit API route takes priority and is not caught by SPA fallback
+        res_api = self.client.get("/health/status")
+        self.assertEqual(res_api.status_code, 200)
+        self.assertEqual(res_api.headers.get("content-type"), "application/json")
 
 if __name__ == "__main__":
     unittest.main()

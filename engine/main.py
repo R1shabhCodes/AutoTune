@@ -568,9 +568,27 @@ def get_report_endpoint(run_id: str):
         }
     )
 
-# Mount the static React build files if they exist (dashboard/dist)
+# Serve static React build files and provide SPA fallback for client-side routing (/ and /console)
 dist_path = os.path.join(REPO_ROOT, "dashboard", "dist")
 if os.path.exists(dist_path):
-    app.mount("/", StaticFiles(directory=dist_path, html=True), name="static")
+    assets_dir = os.path.join(dist_path, "assets")
+    if os.path.exists(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    from fastapi.responses import FileResponse
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa_frontend(full_path: str):
+        # 1. If requesting a specific file that exists in dist (e.g., favicon, icons), serve directly
+        target_file = os.path.join(dist_path, full_path)
+        if full_path and os.path.isfile(target_file):
+            return FileResponse(target_file)
+
+        # 2. Otherwise serve index.html for client-side SPA routing (/ and /console)
+        index_file = os.path.join(dist_path, "index.html")
+        if os.path.exists(index_file):
+            return FileResponse(index_file)
+
+        raise HTTPException(status_code=404, detail="Frontend index.html not found.")
 else:
     print(f"Warning: Static files path '{dist_path}' not found. Build the frontend to serve from FastAPI.")

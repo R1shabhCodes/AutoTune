@@ -1,34 +1,45 @@
 import React from 'react';
-import { Target, Activity, Github, Sparkles, LayoutDashboard, Home } from 'lucide-react';
+import { Terminal, Github, LayoutDashboard, Home, ArrowRight, ExternalLink } from 'lucide-react';
 
-export default function Navbar({ activeTab, setActiveTab, status }) {
+export default function Navbar({ currentPath = '/', onNavigate, status = 'idle' }) {
+  const isConsole = currentPath.startsWith('/console');
+
   return (
-    <header className="navbar-container">
+    <header className="navbar-container" role="banner">
       <div className="navbar-left">
-        <div className="navbar-brand" onClick={() => setActiveTab('home')}>
+        <div
+          className="navbar-brand"
+          onClick={() => onNavigate('/')}
+          style={{ cursor: 'pointer' }}
+          title="AutoTune 2.0 Home"
+        >
           <div className="navbar-logo-icon">
-            <Target className="w-5 h-5 text-purple-400" />
+            <Terminal className="w-4 h-4 text-accent" />
           </div>
-          <span className="navbar-brand-name">AutoTune <span className="brand-badge">RAG</span></span>
+          <span className="navbar-brand-name">
+            AutoTune <span className="brand-badge">2.0</span>
+          </span>
         </div>
 
-        <nav className="navbar-links">
-          <button 
-            className={`nav-tab-btn ${activeTab === 'home' ? 'active' : ''}`}
-            onClick={() => setActiveTab('home')}
+        <nav className="navbar-links" aria-label="Primary navigation">
+          <button
+            className={`nav-tab-btn ${!isConsole ? 'active' : ''}`}
+            onClick={() => onNavigate('/')}
+            type="button"
           >
             <Home className="w-4 h-4" />
             <span>Home</span>
           </button>
 
-          <button 
-            className={`nav-tab-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
-            onClick={() => setActiveTab('dashboard')}
+          <button
+            className={`nav-tab-btn ${isConsole ? 'active' : ''}`}
+            onClick={() => onNavigate('/console')}
+            type="button"
           >
             <LayoutDashboard className="w-4 h-4" />
-            <span>Dashboard</span>
+            <span>Console</span>
             {status === 'running' && (
-              <span className="nav-status-dot running" title="Optimizer Running" />
+              <span className="nav-status-dot running" title="Optimization run in progress" />
             )}
           </button>
         </nav>
@@ -37,12 +48,12 @@ export default function Navbar({ activeTab, setActiveTab, status }) {
       <div className="navbar-right">
         <div className={`status-pill ${status === 'running' ? 'running' : 'idle'}`}>
           <span className="status-indicator-dot" />
-          <span className="status-text">{status === 'running' ? 'Optimizing Pipeline...' : 'Engine Idle'}</span>
+          <span className="status-text">{status === 'running' ? 'Optimization Active' : 'Engine Ready'}</span>
         </div>
 
-        <a 
-          href="https://github.com/R1shabhCodes/AutoTune" 
-          target="_blank" 
+        <a
+          href="https://github.com/R1shabhCodes/AutoTune"
+          target="_blank"
           rel="noopener noreferrer"
           className="navbar-github-btn"
           title="View GitHub Repository"
@@ -51,20 +62,23 @@ export default function Navbar({ activeTab, setActiveTab, status }) {
           <span>GitHub</span>
         </a>
 
-        {activeTab === 'home' ? (
-          <button 
+        {!isConsole ? (
+          <button
             className="navbar-cta-btn glow-btn"
-            onClick={() => setActiveTab('dashboard')}
+            onClick={() => onNavigate('/console')}
+            type="button"
           >
-            <Sparkles className="w-4 h-4" />
-            <span>Launch Dashboard</span>
+            <span>Open Console</span>
+            <ArrowRight className="w-4 h-4" />
           </button>
         ) : (
-          <button 
+          <button
             className="navbar-secondary-btn"
-            onClick={() => setActiveTab('home')}
+            onClick={() => onNavigate('/')}
+            type="button"
           >
-            <span>Overview</span>
+            <Home className="w-4 h-4" />
+            <span>Product Home</span>
           </button>
         )}
       </div>
